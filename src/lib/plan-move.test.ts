@@ -15,9 +15,9 @@ const OLD: Record<string, string> = {
   ].join("\n"),
   "lunch-plan.csv": [
     "date,kid,main,fruit,side,treat,snack,school_lunch,no_school,groceries",
-    `${yesterday},Theo,Bean and cheese burrito,Grapes,Goldfish,,,,,`,
-    `${soon},Theo,Bean and cheese burrito,Grapes,Goldfish,,Cheese and crackers,,,`,
-    `${soon},Leo,,,,,,,yes,`,
+    `${yesterday},Everett,Bean and cheese burrito,Grapes,Goldfish,,,,,`,
+    `${soon},Everett,Bean and cheese burrito,Grapes,Goldfish,,Cheese and crackers,,,`,
+    `${soon},Isaiah,,,,,,,yes,`,
   ].join("\n"),
 };
 vi.mock("node:fs/promises", async (actual) => {
@@ -37,7 +37,7 @@ describe("moving the old plan over", () => {
     // Not yesterday's, not the one made, not the skipped night.
     expect(p.dishes.map((d) => [d.kind, d.recipe]).sort()).toEqual([["kids", "mac-1"], ["quick", "salmon-1"], ["quick", "tacos-1"]]);
     expect(p.lunches).toHaveLength(1);
-    expect(p.lunches[0]).toMatchObject({ kid: "Theo", main: "Bean and cheese burrito", snack: "Cheese and crackers" });
+    expect(p.lunches[0]).toMatchObject({ kid: "Everett", main: "Bean and cheese burrito", snack: "Cheese and crackers" });
     expect(p.lastMade["turkey-chili-1"]).toBe(today); // made in the old plan still counts
     // The night whose groceries were waiting has them on the list now; the others had theirs already.
     const items = (await loadList()).items;

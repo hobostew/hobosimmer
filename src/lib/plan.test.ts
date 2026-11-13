@@ -4,7 +4,7 @@ import { addFrozen, changePlanned, clearPlanned, setCount, fromTheTap, loadFreez
 import { todayIn } from "./time";
 import { planLunches } from "./week";
 
-const counts = { quick: 1, regular: 1, kids: 0, dessert: 0, side: 0, breakfast: 0, lunches: { Theo: 2, Leo: 0 } };
+const counts = { quick: 1, regular: 1, kids: 0, dessert: 0, side: 0, breakfast: 0, lunches: { Everett: 2, Isaiah: 0 } };
 
 describe("planning by number", () => {
   it("never puts tap water on a list", () => {
@@ -17,9 +17,9 @@ describe("planning by number", () => {
   it("saves what's planned, puts everything it needs on the list at once, and remembers the numbers", async () => {
     const first = await loadPlan();
     expect(first.dishes).toEqual([]);
-    expect(first.counts).toMatchObject({ quick: 2, regular: 3, lunches: { Theo: 5, Leo: 5 } }); // a usual week, the first time
+    expect(first.counts).toMatchObject({ quick: 2, regular: 3, lunches: { Everett: 5, Isaiah: 5 } }); // a usual week, the first time
     expect(first.lunchOptions.length).toBeGreaterThan(5);
-    const lunches = planLunches([{ name: "Theo", count: 2 }], first.lunchOptions).map(({ kid, main, fruit, side, treat, snack }) => ({ kid, main, fruit, side, treat, snack }));
+    const lunches = planLunches([{ name: "Everett", count: 2 }], first.lunchOptions).map(({ kid, main, fruit, side, treat, snack }) => ({ kid, main, fruit, side, treat, snack }));
     const saved = await savePlan([{ kind: "regular", recipe: "turkey-chili-1", pinned: true }, { kind: "quick", recipe: "Dinner with G&G", pinned: true }], lunches, counts, "Robin");
     expect(saved.added).toBeGreaterThan(5);
     const { items } = await loadList();
@@ -30,7 +30,7 @@ describe("planning by number", () => {
 
     const p = await loadPlan();
     expect(p.dishes.map((d) => [d.kind, d.recipe, d.pinned])).toEqual([["regular", "turkey-chili-1", true], ["quick", "Dinner with G&G", true]]);
-    expect(p.lunches.filter((l) => l.kid === "Theo")).toHaveLength(2);
+    expect(p.lunches.filter((l) => l.kid === "Everett")).toHaveLength(2);
     expect(p.counts).toMatchObject(counts); // last time's numbers
     // Looking again adds nothing; nothing waits to be added later.
     const before = (await loadList()).items.length;
@@ -109,7 +109,7 @@ describe("planning by number", () => {
   });
 
   it("planning the next shop closes this week: its dinners count as made the day they were planned, lunches go", async () => {
-    await savePlan([], planLunches([{ name: "Leo", count: 1 }], (await loadPlan()).lunchOptions).map(({ kid, main, fruit, side, treat, snack }) => ({ kid, main, fruit, side, treat, snack })), null, "Sam");
+    await savePlan([], planLunches([{ name: "Isaiah", count: 1 }], (await loadPlan()).lunchOptions).map(({ kid, main, fruit, side, treat, snack }) => ({ kid, main, fruit, side, treat, snack })), null, "Sam");
     const before = await loadPlan();
     expect(before.dishes.length).toBeGreaterThan(0);
     expect(before.lunches.length).toBeGreaterThan(0);
