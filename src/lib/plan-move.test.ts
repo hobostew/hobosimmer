@@ -23,7 +23,7 @@ const OLD: Record<string, string> = {
 vi.mock("node:fs/promises", async (actual) => {
   const real = await actual<typeof import("node:fs/promises")>();
   const readFile = (async (p: string, enc: BufferEncoding) => {
-    const name = String(p).split("/").pop()!;
+    const name = String(p).split(/[\\/]/).pop()!; // Windows separates with \
     return name in OLD ? OLD[name] : real.readFile(p, enc);
   }) as typeof real.readFile;
   return { ...real, default: { ...real, readFile }, readFile };

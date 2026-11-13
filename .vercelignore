@@ -4,7 +4,6 @@
 service-account.json
 .data/
 .claude/
-scripts/*
-!scripts/zip-helper.mjs
+scripts/
 node_modules/
 .next/

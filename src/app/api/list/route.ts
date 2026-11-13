@@ -2,7 +2,6 @@ import { AppError } from "@/lib/errors";
 import { recordTrip } from "@/lib/plan";
 import { friendly } from "@/lib/friendly";
 import { authorized, unauthorized } from "@/lib/auth";
-import { clearCart, loadCart } from "@/lib/safeway";
 import { addItem, addItems, addStaple, file, parseEntry, checkItem, haveTheRest, haveItem, needItem, unneedItem, doneShopping, loadList, moveItem, moveStaple, putBack, removeItem, removeItems, removeStaple, SECTIONS, STORES, type Item, type Section, type Store } from "@/lib/groceries";
 
 const isStore = (s: unknown): s is Store => typeof s === "string" && (STORES as readonly string[]).includes(s);
@@ -67,13 +66,11 @@ export async function POST(req: Request) {
       case "keepAdd": await addStaple(clean(b.text), isSection(b.section) ? b.section : undefined); break;
       case "keepRemove": await removeStaple(clean(b.item)); break;
       case "keepMove": if (!isSection(b.section)) throw new AppError("Which part of Stock?"); await moveStaple(clean(b.item), b.section); break;
-      case "done": if (!isStore(b.store)) throw new AppError("Which store?"); {
-        // Safeway: what's in the cart counts as bought too, and the cart starts empty again.
-        // Ticked in the store (cart: false) leaves the online cart alone.
-        const cart = b.store === "safeway" && b.cart !== false ? await loadCart() : [];
-        await doneShopping(b.store, new Set(cart.map((l) => l.itemId).filter(Boolean)));
-        if (cart.length) await clearCart();
-      } await recordTrip(b.store).catch((e) => console.error("couldn't record the trip", e)); break;
+      case "done":
+        if (!isStore(b.store)) throw new AppError("Which store?");
+        await doneShopping(b.store);
+        await recordTrip(b.store).catch((e) => console.error("couldn't record the trip", e));
+        break;
       default: return Response.json({ error: "Unknown change." }, { status: 400 });
     }
     return Response.json(await loadList(), { headers: { "cache-control": "no-store" } });

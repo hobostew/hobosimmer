@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
-import { checkAgainst, guessIdeas, fromDraft, isoMinutes, loadRecipes, looksLikeIdeas, parseIngredient, recipeInPage, saveRecipe, searchRecipes } from "./recipes";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { checkAgainst, guessIdeas, fromDraft, isoMinutes, loadRecipes, looksLikeIdeas, parseIngredient, readLinks, recipeInPage, saveRecipe, searchRecipes } from "./recipes";
 
 describe("the recipe collection", () => {
   it("reads ingredient lines", () => {
@@ -64,6 +64,47 @@ describe("the recipe collection", () => {
     expect(d.minutes).toBeNull();
     expect(d.serves).toBeNull();
     expect(d.ingredients).toEqual(["2 carrots", "onion"]);
+  });
+});
+
+describe("a list of favorites, read in one go", () => {
+  const page = (name: string) => `<html><script type="application/ld+json">${JSON.stringify({
+    "@type": "Recipe", name, recipeIngredient: ["1 lb something"], recipeInstructions: ["Cook."], totalTime: "PT25M",
+  })}</script></html>`;
+  const PAGES: Record<string, string> = {
+    "https://example.com/one": page("Recipe one"),
+    "https://example.com/two": page("Recipe two"),
+    "https://example.com/three": page("Recipe three"),
+  };
+  afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+  const serve = () => vi.stubGlobal("fetch", vi.fn(async (url: URL | string) => {
+    const html = PAGES[String(url)];
+    return html ? new Response(html, { status: 200, headers: { "content-type": "text/html" } }) : new Response("", { status: 404 });
+  }));
+
+  it("reads every link, in order", async () => {
+    serve();
+    const found = await readLinks(["https://example.com/one", "https://example.com/two", "https://example.com/three"]);
+    expect(found.map((d) => d.name)).toEqual(["Recipe one", "Recipe two", "Recipe three"]);
+  });
+
+  it("skips the same link twice and blank lines", async () => {
+    serve();
+    const found = await readLinks(["https://example.com/one", "", "  ", "https://example.com/one"]);
+    expect(found.map((d) => d.name)).toEqual(["Recipe one"]);
+  });
+
+  it("keeps going when one link won't open", async () => {
+    serve();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const found = await readLinks(["https://example.com/gone", "https://example.com/two"]);
+    expect(found.map((d) => d.name)).toEqual(["Recipe two"]);
+  });
+
+  it("says so when none of them could be read", async () => {
+    serve();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    await expect(readLinks(["https://example.com/gone", "https://example.com/missing"])).rejects.toThrow(/Couldn't open any/);
   });
 });
 

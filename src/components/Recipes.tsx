@@ -1,11 +1,11 @@
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, errorText, fileToSend, type Draft, type Frozen, type Effort, type Ingredient, type Recipe } from "@/lib/client";
-import { freezerMatch } from "@/lib/week";
+import { freezerMatch, isNew } from "@/lib/week";
 import { isSpice, norm } from "@/lib/words";
 import { Check } from "./Shop";
 import { Icon } from "./icons";
-import { Alert, BrandBar, Button, EmptyState, Group, Held, IconButton, Row, Segmented, Sheet, TopBar, useSwipe } from "./ui";
+import { Alert, BrandBar, Button, ConfirmSheet, EmptyState, Group, Held, IconButton, Row, Segmented, Sheet, TopBar, useSwipe } from "./ui";
 
 const EFFORT: Record<Effort, string> = { quick: "Quick", regular: "Regular" };
 const FOR = { everyone: "Everyone", kids: "Kids' dinner", adults: "Grown-ups" } as const;
@@ -24,7 +24,8 @@ type Opens = { onOpen: (r: Recipe) => void };
 /** A recipe in the collection: tap to open it (Add to the list is on the recipe; the row's own button went, Nov 9). */
 function RecipeRow({ r, onOpen }: { r: Recipe } & Opens) {
   // Only what needs doing (Matt, Nov 10: no minutes or labels under rows); the rest is on the recipe's page.
-  return <Row title={r.name} subtitle={r.ingredients.length ? undefined : NO_INGREDIENTS} accessory="chevron" onClick={() => onOpen(r)} />;
+  const line = !r.ingredients.length ? NO_INGREDIENTS : isNew(r) ? (r.foundAt ? `New · ${r.foundAt}` : "New") : undefined;
+  return <Row title={r.name} subtitle={line} accessory="chevron" onClick={() => onOpen(r)} />;
 }
 
 /** A few of a group, and the rest one tap away, so the list stays short. */
@@ -56,8 +57,10 @@ export function RecipesScreen({ recipes, onOpen, onAdd, freezer = [] }: {
       ) : (
         <>
           <Group><Row icon="plus" title="Add recipes" accessory="chevron" onClick={onAdd} /></Group>
+          {/* New ones first: these are the ones waiting to be cooked and judged. */}
+          <Some header="New to try" items={active.filter((r) => isNew(r)).sort(byName)} {...opens} />
           <Some header="From the freezer" items={active.filter((r) => r.for !== "kids" && freezer.some((f) => [r.protein, ...r.ingredients.map((i) => i.item)].some((it) => it && freezerMatch(f.item, it)))).sort((a, b) => (a.effort === b.effort ? byName(a, b) : a.effort === "quick" ? -1 : 1))} {...opens} />
-          <Some header="Favorites" items={active.filter((r) => (r.rating ?? 0) >= 3).sort(byName)} {...opens} />
+          <Some header="Favorites" items={active.filter((r) => r.favorite && !r.hidden).sort(byName)} {...opens} />
           <Some header="Quick" items={active.filter((r) => r.effort === "quick" && r.for !== "kids").sort(byName)} {...opens} />
           <Some header="Regular" items={active.filter((r) => r.effort === "regular" && r.for !== "kids").sort(byName)} {...opens} />
           <Some header="Kids' dinners" items={active.filter((r) => r.for === "kids").sort(byName)} {...opens} />
@@ -69,7 +72,7 @@ export function RecipesScreen({ recipes, onOpen, onAdd, freezer = [] }: {
 }
 
 /** A recipe (drill-in from Recipes or the week): what it is, what's in it, how it's made, and her one-tap corrections. */
-export function RecipeScreen({ r, onBack, backLabel, onEdit, onActive, onAddToList, planned, onAddToWeek }: {
+export function RecipeScreen({ r, onBack, backLabel, onEdit, onActive, onAddToList, planned, onAddToWeek, onFavorite, onTried, onNeverAgain }: {
   r: Recipe; onBack: () => void; backLabel: string; onEdit: () => void; onActive: (a: boolean) => void; onAddToList: () => void;
   /** It's one of this week's dinners: its groceries went on the list when it was planned. */
   planned?: boolean;
@@ -78,7 +81,14 @@ export function RecipeScreen({ r, onBack, backLabel, onEdit, onActive, onAddToLi
    * saved behind it (Nov 11: no "Adding…"); one that fails comes back off, and the alert says why.
    */
   onAddToWeek?: () => void;
+  /** One of ours: it shapes the new recipes Simmer looks for, and two of these go in every week. */
+  onFavorite: (on: boolean) => void;
+  /** Cooked, and fine: it stops being one of the new ones without becoming a favorite. */
+  onTried: () => void;
+  /** Never again: off every list and never looked for again (kept, so it can't be found a second time). */
+  onNeverAgain: () => void;
 }) {
+  const [dropping, setDropping] = useState(false); // waiting on "Never again?"
   const screen = useRef<HTMLDivElement>(null);
   useSwipe(screen, { onRight: onBack }); // swipe right to go back
   useEffect(() => {
@@ -95,8 +105,20 @@ export function RecipeScreen({ r, onBack, backLabel, onEdit, onActive, onAddToLi
   return (
     <div ref={screen} className="space-y-6">
       <TopBar title={r.name} subtitle={[summary(r, true), r.serves && `Serves ${r.serves}`].filter(Boolean).join(" · ")} onBack={onBack} backLabel={backLabel}
-        trailing={<IconButton icon="pencil" label="Edit" onClick={onEdit} />} />
+        trailing={<>
+          <FavoriteButton on={r.favorite && !r.hidden} name={r.name} onToggle={onFavorite} />
+          <IconButton icon="pencil" label="Edit" onClick={onEdit} />
+        </>} />
+      {isNew(r) && <p className="t-sub px-1 text-accent">{r.foundAt ? `New to you, found at ${r.foundAt}.` : "New to you."}</p>}
       {planned && <p className="t-sub px-1 text-muted">On the plan.</p>}
+      {/* Cooked a new one: the one question that teaches Simmer what to look for next. */}
+      {isNew(r) && (
+        <Group header="Made it?">
+          <Row icon="heart" title="We loved it" value="Keep" accessory="chevron" onClick={() => onFavorite(true)} />
+          <Row icon="check" title="It was fine" value="Keep" accessory="chevron" onClick={onTried} />
+          <Row icon="close" title="Not for us" accessory="chevron" onClick={() => setDropping(true)} />
+        </Group>
+      )}
       {/* Not planned: putting it on this week is the main thing (Nov 9); just its groceries is the quieter choice. */}
       <div className="space-y-3 empty:hidden">
         {!planned && onAddToWeek && <Button onClick={onAddToWeek} icon="calendarPlus" className="w-full">Add to the plan</Button>}
@@ -124,8 +146,25 @@ export function RecipeScreen({ r, onBack, backLabel, onEdit, onActive, onAddToLi
           {link ? <Row title="Where it's from" value={new URL(link).hostname.replace(/^www\./, "")} accessory="external" href={link} /> : r.source && <Row title="Where it's from" value={r.source} />}
         </Group>
       )}
-      <Button variant="plain" onClick={() => onActive(!r.active)} className="w-full">{r.active ? "Stop suggesting this" : "Suggest this again"}</Button>
+      <div className="space-y-1">
+        <Button variant="plain" onClick={() => onActive(!r.active)} className="w-full">{r.active ? "Stop suggesting this" : "Suggest this again"}</Button>
+        {/* Tried it and it's not for us: never looked for again, and never found a second time. */}
+        {!r.hidden && <Button variant="plain" onClick={() => setDropping(true)} className="w-full">Never again</Button>}
+      </div>
+      <ConfirmSheet open={dropping} title={`Never make ${r.name} again?`} confirm="Never again" danger
+        message="It comes off your lists, and nothing like it is looked for again."
+        onConfirm={() => { setDropping(false); onNeverAgain(); onBack(); }} onCancel={() => setDropping(false)} />
     </div>
+  );
+}
+
+/** The heart on a recipe: one of ours. It decides what new recipes are looked for, so it's the one mark that matters. */
+function FavoriteButton({ on, name, onToggle }: { on: boolean; name: string; onToggle: (on: boolean) => void }) {
+  return (
+    <button aria-label={on ? `${name} is a favorite` : `Make ${name} a favorite`} aria-pressed={on} onClick={() => onToggle(!on)}
+      className={`glass flex size-11 shrink-0 items-center justify-center rounded-full transition active:scale-90 ${on ? "text-accent" : "text-muted"}`}>
+      <Icon name="heart" className="size-[20px]" strokeWidth={1.8} filled={on} />
+    </button>
   );
 }
 
@@ -242,7 +281,7 @@ export function AddRecipesSheet({ recipes, onSaved, onClose }: { recipes: Recipe
   if (step.at === "choose") {
     body = (
       <Group>
-        <Row icon="link" title="From a link" accessory="chevron" onClick={() => setStep({ at: "link" })} />
+        <Row icon="link" title="From links" accessory="chevron" onClick={() => setStep({ at: "link" })} />
         <Row icon="camera" title="From a photo" accessory="chevron" onClick={() => photo.current?.click()} />
         <Row icon="book" title="From my files" accessory="chevron" onClick={() => files.current?.click()} />
         <Row icon="pencil" title="Type it in" accessory="chevron" onClick={() => setStep({ at: "text" })} />
@@ -251,11 +290,16 @@ export function AddRecipesSheet({ recipes, onSaved, onClose }: { recipes: Recipe
     // Reading a photo or a file: the shimmer, as every first load looks (Nov 11: no "Reading it…").
     if (busy) body = <Held groups={[4]} label="Reading the recipe" />;
   } else if (step.at === "link") {
+    // One link, or a whole list of favorites at once (one per line): each is read on its own, and one that won't open
+    // is skipped rather than stopping the rest.
+    const links = link.split("\n").map((l) => l.trim()).filter(Boolean);
     body = <>
-      <Field label="Link to the recipe"><input className={FIELD} type="url" inputMode="url" autoFocus value={link} onChange={(e) => setLink(e.target.value)} placeholder="Paste the link" /></Field>
-      {busy && <Held groups={[4]} label="Reading the recipe" />}
+      <Field label="Links to recipes, one per line">
+        <textarea className={`${FIELD} min-h-32`} inputMode="url" autoFocus value={link} onChange={(e) => setLink(e.target.value)} placeholder={"Paste a link, or one per line"} />
+      </Field>
+      {busy && <Held groups={[4]} label="Reading the recipes" />}
     </>;
-    footer = <Button className="w-full" disabled={busy || !link.trim()} onClick={() => read({ link })}>Read it</Button>;
+    footer = <Button className="w-full" disabled={busy || !links.length} onClick={() => read({ link })}>{links.length > 1 ? `Read ${links.length}` : "Read it"}</Button>;
   } else if (step.at === "text") {
     body = (
       <Field label="The recipe, or a list of meal ideas">

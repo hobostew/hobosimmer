@@ -18,12 +18,21 @@ export type Recipe = {
   id: string; name: string; effort: Effort; minutes: number | null; serves: number | null; protein: string;
   ingredients: Ingredient[]; steps: string[]; store: Store | ""; season: string[]; for: For; kidOk: "yes" | "some" | "no" | "";
   makeAhead: boolean; tags: string[]; source: string; rating: number | null; notes: string; active: boolean; addedAt: string;
+  /** One of ours: it shapes what new recipes are looked for, and the week is planned around these. */
+  favorite: boolean;
+  /** Cooked at least once. A recipe found on the web starts untried, and that's what makes it "new" for a week. */
+  tried: boolean;
+  /** Never suggest this again (Never again after cooking it, or turned down when it was found). */
+  hidden: boolean;
+  /** Where a found recipe came from, for "found at allrecipes.com" (the link itself is `source`). */
+  foundAt: string;
 };
 /** A recipe as it's typed or read in, before it has an id: what the import screens show and the editor sends back. */
-export type Draft = Omit<Recipe, "id" | "ingredients" | "addedAt" | "active"> & { id?: string; ingredients: string[]; active?: boolean };
+export type Draft = Omit<Recipe, "id" | "ingredients" | "addedAt" | "active" | "favorite" | "tried" | "hidden" | "foundAt"> &
+  { id?: string; ingredients: string[]; active?: boolean; favorite?: boolean; tried?: boolean; hidden?: boolean; foundAt?: string };
 
 const TAB = "Recipes";
-const HEADERS = ["id", "name", "effort", "minutes", "serves", "protein", "ingredients", "steps", "store", "season", "for", "kid_ok", "make_ahead", "tags", "source", "rating", "notes", "active", "added_at"];
+const HEADERS = ["id", "name", "effort", "minutes", "serves", "protein", "ingredients", "steps", "store", "season", "for", "kid_ok", "make_ahead", "tags", "source", "rating", "notes", "active", "added_at", "favorite", "tried", "hidden", "found_at"];
 
 const yes = (s: string) => /^(yes|y|true|1|x)$/i.test(s.trim());
 const num = (s: string) => { const n = parseFloat(s); return Number.isFinite(n) && n > 0 ? Math.round(n) : null; };
@@ -70,6 +79,11 @@ function toRecipes(rows: string[][]): Recipe[] {
       season: words(r.get("season")).map((s) => s.toLowerCase()), for: asFor(r.get("for")), kidOk: asKidOk(r.get("kid_ok")), makeAhead: yes(r.get("make_ahead")),
       tags: words(r.get("tags")).map((s) => s.toLowerCase()), source: r.get("source"), rating: num(r.get("rating")), notes: r.get("notes"),
       active: !/^(no|n|false|0)$/i.test(r.get("active")), addedAt: r.get("added_at"),
+      // A collection from before these columns: everything in it was put there by hand, so it counts as a favorite
+      // already cooked. Only recipes found on the web (which write "no") are untried.
+      favorite: r.has("favorite") ? yes(r.get("favorite")) : true,
+      tried: r.has("tried") ? yes(r.get("tried")) : true,
+      hidden: yes(r.get("hidden")), foundAt: r.get("found_at"),
     }];
   });
 }
@@ -94,6 +108,7 @@ function cells(r: Recipe): Record<string, string> {
     ingredients: r.ingredients.map((i) => i.line).join("\n"), steps: r.steps.join("\n"), store: r.store, season: r.season.join(", "), for: r.for,
     kid_ok: r.kidOk, make_ahead: r.makeAhead ? "yes" : "", tags: r.tags.join(", "), source: r.source, rating: r.rating ? String(r.rating) : "",
     notes: r.notes, active: r.active ? "yes" : "no", added_at: r.addedAt,
+    favorite: r.favorite ? "yes" : "no", tried: r.tried ? "yes" : "no", hidden: r.hidden ? "yes" : "", found_at: r.foundAt,
   };
 }
 
@@ -114,6 +129,11 @@ export function fromDraft(d: Draft, existing?: Recipe): Recipe {
     kidOk: asKidOk(str(d.kidOk)), makeAhead: Boolean(d.makeAhead), tags: strs(d.tags).map((t) => t.trim().toLowerCase()).filter(Boolean), source: str(d.source),
     rating: rating && rating >= 1 ? Math.min(3, Math.round(rating)) : null, notes: str(d.notes).trim(), active: d.active ?? existing?.active ?? true,
     addedAt: existing?.addedAt ?? new Date().toISOString(),
+    // Typed or pasted in by hand: a favorite, already cooked. Found on the web: the draft says otherwise.
+    favorite: d.favorite ?? existing?.favorite ?? true,
+    tried: d.tried ?? existing?.tried ?? true,
+    hidden: d.hidden ?? existing?.hidden ?? false,
+    foundAt: str(d.foundAt) || existing?.foundAt || "",
   };
 }
 
@@ -228,6 +248,23 @@ function checkLink(raw: string): URL {
   const h = u.hostname.toLowerCase();
   if (!/^https?:$/.test(u.protocol) || !h.includes(".") || /^[\d.]+$|:|^localhost$|\.(local|internal|localhost)$/.test(h)) throw new AppError("That doesn't look like a link to a recipe page.");
   return u;
+}
+
+/**
+ * Several links at once (one per line), for filling the collection from a list of favorites. Each is read as one link
+ * is; one that can't be opened is skipped rather than stopping the rest. Fails only when none of them could be read.
+ */
+export async function readLinks(raws: string[]): Promise<Draft[]> {
+  const links = [...new Set(raws.map((s) => s.trim()).filter(Boolean))].slice(0, 30);
+  if (links.length === 1) return readLink(links[0]);
+  const out: Draft[] = [];
+  // A few at a time: gentler on the sites, and well inside the request's time.
+  for (let i = 0; i < links.length; i += 4) {
+    const batch = await Promise.all(links.slice(i, i + 4).map((l) => readLink(l).catch((e) => { console.error("couldn't read", l, e); return [] as Draft[]; })));
+    for (const found of batch) if (found[0]) out.push(found[0]);
+  }
+  if (!out.length) throw new AppError("Couldn't open any of those links. Check them and try again.");
+  return out;
 }
 
 /** Reads the recipe at a link: the page's own recipe data first, the model only when a page doesn't have it. */

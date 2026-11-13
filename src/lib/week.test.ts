@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { fromDraft, type Draft, type Recipe } from "./recipes";
-import { firstCounts, isDinner, kindOf, lunchShopping, nextOption, pickMany, planLunches, rank, somethingElse, type Context, type LunchOption } from "./week";
+import { firstCounts, isDinner, kindOf, lunchShopping, needNew, nextOption, pickMany, planLunches, planWeek, rank, somethingElse, type Context, type LunchOption } from "./week";
 
 const base: Draft = { name: "", effort: "quick", minutes: null, serves: null, protein: "", ingredients: [], steps: [], store: "", season: [], for: "everyone", kidOk: "", makeAhead: false, tags: [], source: "", rating: null, notes: "" };
 const r = (id: string, p: Partial<Draft>): Recipe => fromDraft({ ...base, name: id, id, ...p });
@@ -26,7 +26,6 @@ const recipes = [
 const ctx: Context = {
   recipes, lastMade: { "roast chicken": "2026-10-28", chili: "2026-03-10" },
   people: [{ name: "Sam", isAdult: true, likes: ["Spicy food"], dislikes: [] }, { name: "Theo", isAdult: false, likes: [], dislikes: ["Mushrooms"] }],
-  trips: { traderJoes: false, costco: false },
   today: "2026-11-03",
 };
 const ids = (xs: { recipe: Recipe }[]) => xs.map((o) => o.recipe.id);
@@ -48,9 +47,7 @@ describe("planning by number", () => {
   it("only picks what fits the kind", () => {
     const quick = ids(rank("quick", [], ctx));
     expect(quick.every((id) => recipes.find((x) => x.id === id)!.effort === "quick")).toBe(true);
-    expect(quick).not.toContain("tj meatballs"); // no Trader Joe's trip
     expect(quick).not.toContain("mac and cheese"); // the boys' own dinners are their own kind
-    expect(ids(rank("quick", [], { ...ctx, trips: { traderJoes: true, costco: false } }))).toContain("tj meatballs");
     const regular = ids(rank("regular", [], ctx));
     expect(regular.at(-1)).toBe("roast chicken"); // made 6 days ago: last, only when nothing else fits
     expect(rank("regular", [], ctx).at(-1)!.why).toBe("Made recently: nothing else fits");
@@ -78,7 +75,12 @@ describe("planning by number", () => {
 
   it("gives fewer when fewer fit", () => {
     expect(pickMany({ side: 3 }, [], ctx).map((p) => p.recipe)).toEqual(["slaw"]);
-    expect(pickMany({ quick: 14 }, [], ctx).length).toBe(4); // tacos, salmon, quesadillas, beef bowls
+    expect(pickMany({ quick: 14 }, [], ctx).length).toBe(5); // tacos, salmon, quesadillas, beef bowls, tj meatballs
+  });
+
+  it("never picks one that's been turned down for good", () => {
+    const hidden = recipes.map((x) => (x.id === "chili" ? { ...x, hidden: true } : x));
+    expect(ids(rank("regular", [], { ...ctx, recipes: hidden }))).not.toContain("chili");
   });
 
   it("varies the protein", () => {
@@ -108,6 +110,60 @@ describe("planning by number", () => {
 
   it("starts from a usual week the first time", () => {
     expect(firstCounts(["Theo", "Leo"], true)).toEqual({ quick: 2, regular: 3, kids: 1, dessert: 0, side: 0, breakfast: 0, lunches: { Theo: 5, Leo: 5 } });
+  });
+});
+
+describe("a week of favorites and new ones", () => {
+  // Two of theirs, and two found since that nobody's cooked yet.
+  const fresh = [
+    r("harissa chicken", { effort: "quick", protein: "chicken thighs", favorite: false, tried: false, source: "https://example.com/harissa" }),
+    r("miso salmon", { effort: "regular", protein: "salmon", favorite: false, tried: false, source: "https://example.com/miso" }),
+    r("peanut noodles", { effort: "quick", protein: "peanut", favorite: false, tried: false, source: "https://example.com/noodles" }),
+  ];
+  const mixed: Context = { ...ctx, recipes: [...recipes, ...fresh] };
+  const mix = { favorites: 2, fresh: 2 };
+  const idOf = (c: { recipe: string }) => c.recipe;
+  const isUntried = (id: string) => fresh.some((f) => f.id === id);
+
+  it("picks two of ours and two to try", () => {
+    const week = planWeek(mix, [], mixed);
+    expect(week).toHaveLength(4);
+    expect(week.slice(0, 2).map(idOf).every((id) => !isUntried(id))).toBe(true);
+    expect(week.slice(2).map(idOf).every(isUntried)).toBe(true);
+    expect(new Set(week.map(idOf)).size).toBe(4);
+  });
+
+  it("writes each one down as quick or regular, so the rest of Simmer is unchanged", () => {
+    for (const c of planWeek(mix, [], mixed)) expect(["quick", "regular"]).toContain(c.kind);
+  });
+
+  it("says why each one is there", () => {
+    const week = planWeek(mix, [], mixed);
+    expect(week.every((c) => c.why.length > 0)).toBe(true);
+  });
+
+  it("leaves out what's already planned, and is the same every time", () => {
+    const week = planWeek(mix, ["tacos", "harissa chicken"], mixed);
+    expect(week.map(idOf)).not.toContain("tacos");
+    expect(week.map(idOf)).not.toContain("harissa chicken");
+    expect(planWeek(mix, ["tacos", "harissa chicken"], mixed)).toEqual(week);
+  });
+
+  it("varies the protein across the week", () => {
+    const week = planWeek({ favorites: 2, fresh: 0 }, [], mixed);
+    const proteins = week.map((c) => mixed.recipes.find((x) => x.id === c.recipe)!.protein).filter(Boolean);
+    expect(new Set(proteins).size).toBe(proteins.length);
+  });
+
+  it("gives fewer when there's nothing new here yet", () => {
+    expect(planWeek(mix, [], ctx)).toHaveLength(2); // only the favorites
+  });
+
+  it("counts how many new ones still have to be found", () => {
+    expect(needNew(mix, ctx.recipes, [])).toBe(2); // nothing untried here
+    expect(needNew(mix, mixed.recipes, [])).toBe(0); // three waiting already
+    expect(needNew(mix, [...recipes, fresh[0]], [])).toBe(1);
+    expect(needNew(mix, mixed.recipes, fresh.map((f) => f.id))).toBe(2); // all three planned already
   });
 });
 

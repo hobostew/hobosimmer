@@ -1,7 +1,8 @@
 # Simmer: how it's built
 
-Simmer started from the foundation of **Head Out** (a sibling app), the family's day-out planner. This page is the
-shape of the app and the lessons that came from building Head Out, so they don't have to be learned twice.
+Simmer plans a week of dinners from the recipes the house already loves, finds a couple of new ones on the web to try,
+and puts everything they need on the grocery list. This page is the shape of the app and the lessons behind it, so
+they don't have to be learned twice.
 
 ## The shape
 
@@ -9,108 +10,124 @@ shape of the app and the lessons that came from building Head Out, so they don't
   (`src/app/page.tsx` → `components/App.tsx`); screens are views inside it, not routes. It installs to the home screen
   (`app/manifest.ts`, `public/icon*.png`) and works offline (`public/sw.js`).
 - **No accounts.** One household passcode, typed once per phone and sent as the `x-passcode` header. Every API route
-  checks it (`lib/auth.ts`, fails closed). `/api/version` is the exception: it's only a build id.
-- **The Google Sheet is the data store.** People edit it by hand and Gemini edits it too, so parsing is forgiving: columns
-  are matched by header name in any order, values in any capitalization, and a bad row is skipped and reported, never fatal
-  (`lib/parse.ts`). The server keeps the last good copy for 60 s and falls back to it when the Sheet can't be reached
-  (`lib/data.ts`). The Sheet's id is in `lib/google/sheets.ts`; without the service account key, local dev reads `data/*.csv`.
-- **Code owns facts; the model writes words.** Anything checkable (dates, times, quantities, what's in the Sheet) comes from
-  code. Gemini (`lib/google/gemini.ts`, structured JSON output, retries, a lighter fallback model) only writes the friendly
-  sentences. In Head Out, people's names were swapped for roles ("Adult A", "Child, 10") before anything was sent to the
-  model and swapped back after; keep doing that.
+  checks it (`lib/auth.ts`, fails closed). `/api/version` is the exception: it's only a build id. There is no notion of
+  separate users or households: one deployment is one family's.
+- **The data is a set of tabs.** Each is rows, as a spreadsheet would hold them, kept in Upstash Redis
+  (`lib/google/redis-tabs.ts`). Parsing is forgiving: columns are matched by header name in any order, values in any
+  capitalization, and a bad row is skipped and reported, never fatal (`lib/parse.ts`). Without Redis (local dev, tests)
+  the app reads `data/*.csv` instead, so `npm run dev` needs no setup at all. A new Redis starts empty:
+  `node scripts/seed.mjs --write` fills it from `data/*.csv`. Settings → Copy to Google Sheet writes everything out to
+  a Sheet as a backup; the Sheet is never read.
+- **Code owns facts; the model writes words.** This is the rule the whole app leans on. Anything checkable — dates,
+  times, quantities, what's in a recipe — comes from code. Gemini (`lib/google/gemini.ts`) suggests and phrases, and is
+  never believed on its own. People's names are swapped for roles ("Adult A", "Child, 10") before anything is sent.
 - **Errors in plain words.** Server failures become "That didn't load. Try again in a minute." (`lib/friendly.ts`);
   problems written for people are thrown as `AppError` and shown as is. A dropped connection reads "No connection…".
+
+## A week
+
+The Meals tab is the week. With nothing planned it offers one thing: **Plan the week**, which is
+`WEEK.favorites` dinners from the favorites and `WEEK.fresh` new ones to try (2 and 2, in `lib/week.ts`).
+
+1. **What's missing is found first.** `needNew` counts how many untried recipes are already in the collection; only the
+   shortfall is looked for (`api.discover` → `/api/recipes/discover` → `lib/discover.ts`). This is the slowest thing
+   Simmer does — a web search, then several pages opened — so the button rests while it runs.
+2. **The week itself is plain code.** `planWeek` picks the favorites, then the new ones, each pick shaping the next
+   (the same protein twice running counts against the second). The same collection always gives the same week, and it's
+   all unit-tested (`lib/week.test.ts`). Each dinner is still written down as quick or regular, so the rest of the app
+   is unchanged: what decides a week is favorite or new, not quick or regular.
+3. **The list follows.** Saving the week runs every dinner through `needFor` → `addItems` (`lib/plan.ts`,
+   `lib/groceries.ts`): fresh things to buy, pantry things to check in Stock, amounts summed where two dinners share an
+   ingredient, tap water and anything in the freezer left out.
+
+## Finding new recipes (`lib/taste.ts`, `lib/discover.ts`)
+
+The risk here is obvious: a model asked for recipes will invent them, and an invented recipe would put invented food on
+a real shopping list. So the model is never trusted with a fact:
+
+- **What the house likes is worked out in code.** `tasteOf` tallies the favorites' tags, proteins and usual cooking
+  time, and carries the household's allergies and dislikes. No model involved, and tested.
+- **The model may answer with links and nothing else.** Its schema has three fields: url, title, why. There is nowhere
+  for it to put an ingredient, a time or a serving count.
+- **Every link is then opened and read by our own code** — `readLink`, the same reader Add recipes uses, which prefers
+  the page's own recipe data. A link that doesn't answer, a page with no recipe on it, a recipe already in the
+  collection, one that isn't a dinner, and anything with a household allergy in it all drop out silently
+  (`lib/discover.test.ts` covers each). What's left came off a real page.
+- **A recipe found this way is saved untried and not a favorite.** That's what makes it one of the week's new ones.
+
+## Learning (the loop that makes it better)
+
+A new recipe's page asks one question after it's cooked: **We loved it** (a favorite: it shapes what's looked for next,
+and two favorites go into every week), **It was fine** (tried, so it stops being new), or **Not for us** (hidden: off
+every list, never looked for again, and kept so it can't be found a second time). The heart at the top of any recipe
+does the same thing at any time. Favorites are the only input to taste, so this one tap is how Simmer learns.
 
 ## The interface
 
 Everything comes from `components/ui.tsx`, so every screen looks and behaves the same:
 
 - `TopBar` on every screen: the Simmer lockup top left (it never moves), at most one action then the same Settings
-  button top right (`OpenSettings`, set once in `App.tsx`, so screens don't pass it), then one large title in the same
-  place. Settings holds who's using the phone, Add recipes, and the look. Drill-in screens get a round back chevron
-  before the title, named for the screen below; swiping right also goes back (`useSwipe`).
-- Navigation is one back stack in `App.tsx`: a tab (Meals, Shop, or Recipes) with screens pushed on it (a
-  recipe). Back pops; a tab tap starts that tab fresh. The tab bar shows on every screen, the stack's tab lit. Sheets
-  name what they show (a week, a night, an item) rather than holding a copy, so a refresh shows in them. A passcode
-  turned down by any request (the client sends `SIGNED_OUT`) closes everything and asks for it again.
-- `BrandBar`'s `below` pins a switch inside the top bar, under the same blurred backing (Shop's List · Find · Cart).
-- `TabBar`: the three tabs in one Liquid Glass capsule. There is no search; the Recipes tab lists the collection by
-  kind, each kind opening to all of it (the plan's recipe picker still searches).
+  button top right (`OpenSettings`, set once in `App.tsx`), then one large title in the same place. Drill-in screens
+  get a round back chevron before the title, named for the screen below; swiping right also goes back (`useSwipe`).
+- Navigation is one back stack in `App.tsx`: a tab (Recipes, Meals, Stock, Lists) with screens pushed on it. Back pops;
+  a tab tap starts that tab fresh. Sheets name what they show rather than holding a copy, so a refresh shows in them. A
+  passcode turned down by any request (the client sends `SIGNED_OUT`) closes everything and asks for it again.
 - `Group`/`Row` (inset grouped lists), `Button` (primary is tinted glass; no gradients on anything you tap), `Sheet`
-  (one grabber, pull down to close, page dots, rides above the keyboard), `EmptyState`, `IconBadge`.
+  (one grabber, pull down to close, rides above the keyboard), `EmptyState`, `IconBadge`.
 - Problems are one `Alert` over the page (a short headline, the reason, OK), never a bar that pushes the page; risky
-  actions ask first with one `ConfirmSheet` (headline, one muted line, the action, Cancel). No Undo, no toasts, no
-  "Saving…": a change shows at once and saves behind it; one that fails is put back and the alert says why. A first
-  load with nothing saved here shows `Held`, grey rows with Head Out's `.shimmer`; no loading words, no spinners.
+  actions ask first with one `ConfirmSheet`. No Undo, no toasts, no "Saving…": a change shows at once and saves behind
+  it; one that fails is put back and the alert says why. A first load with nothing saved here shows `Held`, grey rows
+  with a `.shimmer`; no loading words, no spinners.
 - Settings ends with the release as YY.M.D (`NEXT_PUBLIC_VERSION`, worked out in `next.config.ts`).
-- Type scale `t-*` utilities and colors as CSS variables in `app/globals.css`. Themes set `--accent` and a brand gradient
-  (`--g1..g3`) used only on non-interactive brand surfaces. Simmer (calm sage, matching the icon), Apricot (the original warm orange), then plain iOS colors.
+- Type scale `t-*` utilities and colors as CSS variables in `app/globals.css`. Themes set `--accent` and a brand
+  gradient (`--g1..g3`) used only on non-interactive brand surfaces.
 - One line-icon set (`components/icons.tsx`). No emoji anywhere.
 
-## Shop and Safeway
-
-The Shop tab (`components/Shop.tsx`, `Safeway.tsx`, logic in `lib/shop.ts` with tests) switches between **List** (the
-shared list by store; Safeway items show "In the cart · 2" once added, and tapping one opens Find on it), **Find** (one
-Safeway item at a time: Simmer's own search words, Safeway's results with pictures and prices, the usual first, Add
-then − / +) and **Cart** (Simmer's copy of the Safeway cart, the total, and "Check out on Safeway").
-
-Safeway can't be reached from Simmer's server, so searches and cart changes are **jobs** done by the Safeway helper in
-Chrome on a computer (`extension-working/`): Simmer queues a job (`/api/safeway/jobs`, `lib/jobs.ts`, the "Safeway jobs" tab,
-pruned as it goes), the helper takes it, does it on safeway.com and reports back (the app follows it with one request at a
-time that the server answers once the job's finished, or after about 20 s: `waitForJob`, no timer in the app); a quantity set on Safeway goes into
-Simmer's cart ("Safeway cart" tab, `lib/safeway.ts`, with a `cart` column so more carts can be kept later) and a
-product added for an item becomes that item's pick (the Safeway tab, now with the product's picture address; pictures
-are shown from Safeway, never stored). The helper's last check-in is kept too, so when the computer isn't answering
-Find says so at once rather than waiting; after two minutes without one, Lists greys the cart and the Safeway rows
-become a checklist. When Simmer has VAPID keys, queuing a job also sends the helper an empty Web Push so it starts at
-once (`lib/push.ts`). When Safeway's cart page reads empty, the helper reads the Purchases page (Online) too, and an
-order placed since the cart was filled takes the cart's things off the list (`finishJob` in `lib/jobs.ts`). Done shopping for Safeway clears what's ticked or in the cart, and empties the cart. Simmer may be
-framed only by itself and by the helper's panel (`frame-ancestors` in `next.config.ts`); framed there, it takes the
-passcode by message from its parent, only from a Chrome helper page, never from the address.
-
-## Lessons from Head Out (keep these)
+## Lessons worth keeping
 
 - **Dates by the calendar.** Never add 24 hours to get tomorrow: on the nights the clocks change it's wrong. Use
-  `addDays`/`dateIn`. Use `hourCycle: "h23"` (some browsers write midnight as 24). The household's time zone is `TZ`.
-- **Updates while the app is open.** An iPhone can keep the app in memory for days. When it comes back to the front on a
-  screen at rest, it checks `/api/version` (at most once a minute) and reloads into a new build, returning to the same
-  screen. Add new screens to `RESTING` in `App.tsx` only if a reload there loses nothing.
-- **Waits.** Run slow requests through `wait()` in `App.tsx`: one at a time (a double tap sends one request), a Cancel that
-  appears after 2 s (so the second tap of a double tap can't hit it), late answers after Cancel ignored, and an estimate
-  from this phone's recent waits. Never a spinner with no way out.
-- **Offline.** The shell is cached; data saved on the phone (in Head Out, plans) still shows. Coming back online reloads
-  what's needed. `localStorage` reads and writes are always wrapped in try/catch.
+  `addDays`/`dateIn`. Use `hourCycle: "h23"` (some browsers write midnight as 24). The household's zone is `TZ`
+  (`HOUSEHOLD_TZ`, baked in at build time so the server and the phone always agree).
+- **Updates while the app is open.** An iPhone can keep the app in memory for days. When it comes back to the front on
+  a screen at rest, it checks `/api/version` (at most once a minute) and reloads into a new build, returning to the
+  same screen.
+- **Waits.** Anything slow shows at once and settles behind; never a spinner with no way out. Finding new recipes is
+  the one long wait, and the button says what it's doing.
+- **Offline.** The shell is cached; data saved on the phone still shows. Coming back online reloads what's needed.
+  `localStorage` reads and writes are always wrapped in try/catch.
 - **Wrong passcode says so.** The passcode screen shows it as the alert; the button waits for a passcode.
-- **Lists built from choices go stale.** If the choices behind a list change, clear it, so tabs and swipes don't bring
-  back results for old choices.
 - **Swipes inside a sheet stay in the sheet.**
-- **Test at iPhone size (390×844, also 375), light and dark, at clock edges** (just after midnight, late evening, the
-  clock-change nights), offline then online, slow and failed requests, and double taps. In headless Chrome with mobile
-  emulation, `dblclick` doesn't tap and two simultaneous taps become one two-finger touch: tap twice in sequence instead.
+- **Test at iPhone size (390×844, also 375), light and dark, at clock edges**, offline then online, slow and failed
+  requests, and double taps. In headless Chrome with mobile emulation, `dblclick` doesn't tap and two simultaneous taps
+  become one two-finger touch: tap twice in sequence instead.
 
 ## Standing preferences
 
 - No technical words in anything a person sees: no "Gemini", "Google", "Sheet", "tab", "web", "API".
-- No device names in anything a person sees either: not "iPhone", "iPad" or "phone". Say "saved", "here" or "your
-  settings" instead.
+- No device names either: not "iPhone", "iPad" or "phone". Say "saved", "here" or "your settings" instead.
 - No scheduled background jobs. Work happens while someone is using the app (or right after a response, with `after()`).
-- No maintenance screens in the app. The Sheet is where data is managed.
-- Secrets live only in Vercel and on Sam's Mac. Never print them, never commit them.
+- No maintenance screens. The data is managed in the app, or in the CSVs before it's seeded.
+- Secrets live only in Vercel and on the machine that deploys. Never print them, never commit them.
 - Commits and PRs never name the AI model.
 
 ## Running it
 
-- `npm run dev` for local work (no Sheet needed: it reads `data/*.csv`).
-- `npm test` (vitest), `npm run lint`, `npx tsc --noEmit`.
-- Browser smoke test (any day, sample data, phone and iPad sizes): start a server with `HOUSEHOLD_PASSCODE=test123`
-  (e.g. `npx next dev -p 3202`), then `URL=http://localhost:3202/ node scripts/smoke.cjs`.
+- `npm run dev` for local work: no Redis, no keys, no setup — it reads `data/*.csv`. Only finding new recipes needs
+  `GEMINI_API_KEY`.
+- `npm test` (vitest), `npm run lint`, `npx tsc --noEmit`, `npm run build`.
+- Browser smoke test (sample data, phone and iPad sizes): start a server with `HOUSEHOLD_PASSCODE=test123`
+  (e.g. `npx next dev -p 3202`), then `URL=http://localhost:3202/ node scripts/smoke.cjs`. It needs Playwright, which
+  isn't a dependency: `npm install --no-save playwright && npx playwright install chromium`.
 - After changing `public/icon.svg`: `npm run icons`.
 
 ## Setting up production
 
-1. A Google Sheet with a **Profile** tab (`who, type, value`; see `data/profile.csv`), shared as Editor with the service
-   account's email.
-2. A Vercel project linked to this repo, with `HOUSEHOLD_PASSCODE`, `GOOGLE_SERVICE_ACCOUNT_JSON` (the key
-   file's whole JSON on one line) and `GEMINI_API_KEY` (see `.env.example`).
-   These three are secrets: they stay in Vercel (ideally as shared variables linked to every app), never in code,
-   because code is copied everywhere and git keeps every version forever. The Sheet's id isn't a secret, so it lives in code.
+1. A Vercel project linked to this repo, with an Upstash Redis store attached (Vercel sets `KV_REST_API_URL` and
+   `KV_REST_API_TOKEN` itself).
+2. `HOUSEHOLD_PASSCODE`, `HOUSEHOLD_TZ` and `GEMINI_API_KEY` set in Vercel (see `.env.example`). The passcode and the
+   key are secrets: they stay in Vercel, never in code, because code is copied everywhere and git keeps every version
+   forever.
+3. Put the household in `data/profile.csv`, then fill the new Redis once:
+   `vercel env pull .env.local && node --env-file=.env.local scripts/seed.mjs --write`.
+4. Open the app, and add the favorites: Recipes → Add recipes → From links, pasting as many recipe links as you like,
+   one per line. Those become the taste Simmer plans and searches from.

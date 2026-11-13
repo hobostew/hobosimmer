@@ -1,6 +1,6 @@
-// Dates and times. Everything lives in the household's time zone.
-
-export const TZ = "America/Los_Angeles";
+// Dates and times. Everything lives in the household's time zone: set HOUSEHOLD_TZ (next.config.ts bakes it in for the
+// app as NEXT_PUBLIC_TZ, so the server and the phone always agree).
+export const TZ = process.env.NEXT_PUBLIC_TZ || process.env.HOUSEHOLD_TZ || "America/Los_Angeles";
 
 export const todayIn = (now = new Date()) => now.toLocaleDateString("en-CA", { timeZone: TZ });
 /** YYYY-MM-DD plus n calendar days (adding 24 hours goes wrong on the nights the clocks change). */

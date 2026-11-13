@@ -1,8 +1,12 @@
-# Simmer: design and feature plan
+# Simmer: the original design notes (history)
+
+> **Out of date.** This is the plan the app was first built from, for a different household, and much of it no longer
+> describes Simmer: there is no Safeway ordering, no store rhythm, and the week is no longer planned by counting quick
+> and regular nights. It's kept because the reasoning behind the grocery list, the freezer and the lunches is still
+> worth reading. **For how Simmer works now, read `docs/ARCHITECTURE.md`.**
 
 The plan for what Simmer does, how it looks, and the order it gets built. It comes from the conversation Sam and Robin
-had on Oct 25, 2026 about how dinner and groceries work in this house today, and what would help. Read
-`docs/ARCHITECTURE.md` first: everything here is built on that foundation and follows its standing preferences.
+had on Oct 25, 2026 about how dinner and groceries work in this house today, and what would help.
 
 Simmer is for **Robin first**. She does almost all of the planning and ordering today, so every screen is judged by one
 question: does this take less of her time and attention than what she does now? Sam is the second user (he adds to the

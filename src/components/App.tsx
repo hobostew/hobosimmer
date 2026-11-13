@@ -1,13 +1,13 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ActivityScreen, PhoneNote, usePanelActivity } from "./Activity";
-import { api, applyTheme, AuthError, errorText, framed, passcodeFromPanel, SIGNED_OUT, store, tellPanelSignedOut, type Draft, type Ingredient, type Item, type Kind, type ListState, type NewDish, type Person, type Kitchen, type PlanChange, type PlanData, type Recipe, type Theme } from "@/lib/client";
+import { api, applyTheme, AuthError, errorText, SIGNED_OUT, store, type Draft, type Ingredient, type Item, type Kind, type ListState, type NewDish, type Person, type Kitchen, type PlanChange, type PlanData, type Recipe, type Theme } from "@/lib/client";
+import { todayIn } from "@/lib/time";
 import { PasscodeScreen } from "./PasscodeScreen";
 import { SettingsSheet } from "./Settings";
 import { ListsScreen, type ListsActions, type Where } from "./Lists";
 import { StockScreen, type StockActions } from "./Stock";
 import { AddMealSheet, MealsScreen } from "./Week";
-import { kindOf } from "@/lib/week";
+import { kindOf, needNew, planWeek, WEEK } from "@/lib/week";
 import { AddRecipesSheet, AddToListSheet, EditSheet, RecipeScreen, RecipesScreen } from "./Recipes";
 import { Alert, OpenSettings, Splash, TabBar, type TabDef, scrollAppTo } from "./ui";
 
@@ -26,13 +26,11 @@ const isTab = (v: unknown): v is Tab => typeof v === "string" && Object.hasOwn(T
 const saveResume = (root: Tab) => { try { sessionStorage.setItem("sm.resume", root); } catch {} };
 /** The first screen, and whether it's the one the address asked for (not a resume after reloading). */
 function takeResume(): { tab: Tab; asked: boolean } {
-  // The Safeway helper's panel opens Simmer on Shop (?open=shop): Lists, on Safeway.
   const open = typeof location !== "undefined" ? new URLSearchParams(location.search).get("open") : null;
-  const asked = open === "shop" ? "lists" : open;
-  const first = { tab: isTab(asked) ? asked : "week" as Tab, asked: isTab(asked) };
+  const first = { tab: isTab(open) ? open : "week" as Tab, asked: isTab(open) };
   try { const v = sessionStorage.getItem("sm.resume"); sessionStorage.removeItem("sm.resume"); return isTab(v) ? { tab: v, asked: false } : first; } catch { return first; }
 }
-/** Nothing would be lost by reloading now: no sheet open (the panel's activity log doesn't count) and nothing typed. */
+/** Nothing would be lost by reloading now: no sheet open and nothing typed. */
 const atRest = () => !document.querySelector('[role="dialog"]:not([data-at-rest])')
   && ![...document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>("input, textarea")].some((el) => el.value);
 
@@ -58,7 +56,7 @@ export default function App() {
   const top = stack[stack.length - 1];
   const root = stack[0].kind as Tab;
   const [visit, setVisit] = useState(0); // a new one each tab tap, so the tab's screen opens fresh
-  const [listsStart, setListsStart] = useState<Where>("all"); // the store Lists opens on: Safeway in the helper's panel
+  const [listsStart, setListsStart] = useState<Where>("all"); // the store Lists opens on
   // Browser-only state read on the first client render; the server renders only the splash, so nothing mismatches.
   const browser = typeof window !== "undefined";
   const [, setPeople] = useState<Person[]>(() => (browser ? store.people() ?? [] : [])); // last time's; only Settings read it, until "Who's using this?" went (Nov 3)
@@ -88,7 +86,6 @@ export default function App() {
   // out, including ones running in the background, so the client announces it and this listens.
   const signOut = useCallback(() => {
     store.setPasscode(null);
-    tellPanelSignedOut();
     setPassError("Wrong passcode.");
     setSettings(false); setSheet(null); setAddingOne(null); setProblem(null);
     setPhase("passcode");
@@ -173,6 +170,13 @@ export default function App() {
     catch (e) { failed(e); refreshRecipes(); }
   }
   const setActive = (r: Recipe, active: boolean) => recipeChange({ op: "active", id: r.id, active }, (x) => ({ ...x, active }));
+  /** One of ours: it shapes what new recipes are looked for, and two of these go in every week. */
+  const setFavorite = (r: Recipe, favorite: boolean) =>
+    recipeChange({ op: "favorite", id: r.id, favorite }, (x) => ({ ...x, favorite, tried: x.tried || favorite, hidden: favorite ? false : x.hidden }));
+  /** Cooked, and fine: it stops being one of the new ones without becoming a favorite. */
+  const setTried = (r: Recipe) => recipeChange({ op: "tried", id: r.id }, (x) => ({ ...x, tried: true }));
+  /** Never again: off the collection's lists, and never looked for or found again. */
+  const neverAgain = (r: Recipe) => recipeChange({ op: "hide", id: r.id }, (x) => ({ ...x, hidden: true, favorite: false, tried: true, active: false }));
   const problemOf = (e: unknown) => (e instanceof AuthError ? null : errorText(e));
   /**
    * Edit's Save: the sheet closes at once and the recipe shows the change (Nov 11: no "Saving…"); the ingredients follow
@@ -250,6 +254,40 @@ export default function App() {
    * A dinner picked on Meals: shown at once, saved behind it, in turn with count changes (Nov 10: no "Saving…"). A save
    * that fails takes it back off and says so on Meals.
    */
+  /**
+   * Plan the week (Meals): two favorites to come back to and two new ones to try. Any new ones missing are looked for
+   * on the web first, which is slow, so the button rests while it runs and a problem shows as the alert. The picking
+   * itself is plain code (lib/week.ts), and saving the week puts everything it needs on the grocery list.
+   */
+  const [planning, setPlanning] = useState(false);
+  async function planTheWeek() {
+    if (planning) return;
+    setPlanning(true);
+    try {
+      let all = recipes ?? [];
+      const planned = (plan?.dishes ?? []).map((d) => d.recipe);
+      const want = needNew(WEEK, all, planned);
+      if (want > 0) {
+        // Nothing is planned from what's found until it's been read off its own page and saved.
+        try { all = (await api.discover(want)).recipes; gotRecipes(all); }
+        catch (e) { if (e instanceof AuthError) return; didntSave(errorText(e)); }
+      }
+      const choices = planWeek(WEEK, planned, {
+        recipes: all, lastMade: plan?.lastMade ?? {}, freezer: plan?.freezer ?? [],
+        people: (store.people() ?? []).map((p) => ({ name: p.name, isAdult: Boolean(p.isAdult), likes: [], dislikes: [] })),
+        today: todayIn(),
+      });
+      if (!choices.length) { setProblem({ title: "Nothing to plan", message: "Add a few recipes you like first, then plan the week." }); return; }
+      ++planChanges.current;
+      gotPlan(await api.savePlan(choices.map((c) => ({ kind: c.kind, recipe: c.recipe, pinned: false })), [], null, me));
+    } catch (e) {
+      if (!(e instanceof AuthError)) didntSave(errorText(e));
+      refreshPlan();
+    } finally {
+      setPlanning(false);
+    }
+  }
+
   function quickAdd(d: NewDish) {
     const temp = { ...d, id: `adding-${Date.now()}`, added: "" };
     setPlan((p) => (p ? { ...p, dishes: [...p.dishes, temp] } : p));
@@ -292,7 +330,7 @@ export default function App() {
     add: (text, store) => change({ op: "add", text, by: me, ...(store && { store }) }),
     check: (it, checked) => change({ op: "check", id: it.id, checked }, (l) => ({ ...l, items: l.items.map((x) => (x.id === it.id ? { ...x, checked } : x)) })),
     move: (it, to) => change({ op: "move", id: it.id, store: to }, (l) => ({ ...l, items: l.items.map((x) => (x.id === it.id ? { ...x, store: to } : x)) })),
-    done: (s, cart) => change({ op: "done", store: s, cart: Boolean(cart) }, (l) => ({ ...l, items: l.items.filter((x) => !(x.store === s && x.checked)) })),
+    done: (s) => change({ op: "done", store: s }, (l) => ({ ...l, items: l.items.filter((x) => !(x.store === s && x.checked)) })),
     putBack: (items) => change({ op: "putBack", items }, (l) => ({ ...l, items: [...l.items, ...items.filter((x) => !l.items.some((y) => y.id === x.id))] })),
   };
   const stock: StockActions = {
@@ -334,13 +372,10 @@ export default function App() {
     // Started from a microtask: the first screen comes from storage and the network, not from this effect directly.
     const resume = takeResume();
     queueMicrotask(async () => {
-      if (framed() && !store.passcode()) await passcodeFromPanel();
       if (!store.passcode()) setPhase("passcode");
       else loadHousehold().then((ok) => {
         if (!ok) return;
         setStack([{ kind: resume.tab }]);
-        // The helper's panel opens Lists on Safeway, the list that's also the cart.
-        if (resume.asked && resume.tab === "lists") setListsStart("safeway");
         setPhase("app");
       });
     });
@@ -392,8 +427,6 @@ export default function App() {
   const below = stack[stack.length - 2];
   // Named for the screen below, as in every Morales app: "Back to Meals", "Back to Tacos".
   const backLabel = `Back to ${!below ? TAB_NAMES[root] : below.kind === "recipe" ? recipeOf(below.id)?.name ?? TAB_NAMES[root] : TAB_NAMES[below.kind]}`;
-  // In the helper's panel: the computer's work for the phone (components/Activity.tsx).
-  const panel = usePanelActivity(phase === "app" && framed());
 
   return (
     <div id="scroller" className="h-full overflow-y-auto overscroll-y-contain">
@@ -410,7 +443,7 @@ export default function App() {
       {phase === "app" && top.kind === "week" && (
         <MealsScreen key={visit} plan={plan} recipes={recipes ?? []} dinnerGroceries={(list?.items ?? []).length}
           onOpen={(d) => openRecipe(d.recipe)} onAdd={(k) => setAddingOne(k)}
-          onCount={countMeal}
+          onCount={countMeal} onPlanWeek={planTheWeek} planning={planning}
           onNewPlan={() => { changePlan({ op: "clear" }).then(didntSave); }}
           onRemove={(d) => { changePlan({ op: "remove", id: d.id }).then(didntSave); }} />
       )}
@@ -422,11 +455,11 @@ export default function App() {
       )}
       {phase === "app" && open && (
         <RecipeScreen key={open.id} r={open} onBack={back} backLabel={backLabel} onEdit={() => setSheet("edit")}
-          onActive={(a) => setActive(open, a)} onAddToList={() => setSheet("tolist")} planned={Boolean(plan?.dishes.some((d) => d.recipe === open.id))}
+          onActive={(a) => setActive(open, a)} onFavorite={(on) => setFavorite(open, on)} onTried={() => setTried(open)} onNeverAgain={() => neverAgain(open)}
+          onAddToList={() => setSheet("tolist")} planned={Boolean(plan?.dishes.some((d) => d.recipe === open.id))}
           onAddToWeek={kindOf(open) ? () => quickAdd({ kind: kindOf(open)!, recipe: open.id, pinned: true }) : undefined} />
       )}
       </OpenSettings.Provider>
-      {panel.log ? <ActivityScreen jobs={panel.jobs} onUse={panel.dismiss} /> : panel.phoneNow && <PhoneNote job={panel.phoneNow} onOpen={panel.open} />}
       {addingOne && plan && <AddMealSheet kind={addingOne} plan={plan} recipes={recipes ?? []} onAdd={quickAdd} onClose={() => setAddingOne(null)} />}
       {sheet === "add" && <AddRecipesSheet recipes={recipes ?? []} onClose={() => setSheet(null)} onSaved={(all, saved) => {
         gotRecipes(all);

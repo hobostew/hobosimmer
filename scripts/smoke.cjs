@@ -1,7 +1,8 @@
 /* eslint-disable @typescript-eslint/no-require-imports -- a plain Node script, run with node */
-// Browser smoke test at iPhone size (light and dark) and iPad size: passcode, planning by number (one shop at a time: Plan replaces
-// Meals (New plan in the top bar), no lunches, no Made it), the tabs, Settings on every screen, Stock (nothing comes back by itself), Lists (All, and Safeway's in-store
-// checklist after a job goes unanswered), Add a meal and a recipe's Add to the plan, the Recipes tab, a recipe and back, saves that fail (the sheet keeps what was entered), and a passcode turned down mid-use. Saves screenshots to .data/shots.
+// Browser smoke test at iPhone size (light and dark) and iPad size: passcode, Plan the week (two favorites and two new
+// ones) with New plan in the top bar, the tabs, Settings on every screen, Stock (nothing comes back by itself), Lists
+// (one checklist per store), Add a meal and a recipe's Add to the plan, the Recipes tab, a recipe and back, saves that
+// fail (the sheet keeps what was entered), and a passcode turned down mid-use. Saves screenshots to .data/shots.
 // Works on any day of the week, with the sample data (no .env.local), whether or not a week is already planned. Needs Playwright (NODE_PATH if it isn't installed here). Run against a server started with
 // HOUSEHOLD_PASSCODE=test123, e.g. HOUSEHOLD_PASSCODE=test123 npx next dev -p 3202, then URL=http://localhost:3202/ node scripts/smoke.cjs
 const { chromium } = require("playwright");
@@ -211,13 +212,14 @@ const SIZES = [["light", 390, 844, true], ["dark", 390, 844, true], ["light", 82
       const listBefore = await listNow();
       await page.getByRole("button", { name: "New plan", exact: true }).tap(); await page.waitForTimeout(300);
       const fresh = page.getByRole("dialog", { name: "Start a new plan?" });
-      ok("new plan: asks first, saying everything starts fresh and the cart stays", (await fresh.isVisible()) && (await fresh.getByText(/Everything starts fresh/).isVisible()) && (await fresh.getByText(/Safeway cart stays/).isVisible()) && (await fresh.getByText(/week/i).count()) === 0);
+      ok("new plan: asks first, saying everything starts fresh", (await fresh.isVisible()) && (await fresh.getByText(/Everything starts fresh/).isVisible()));
       await fresh.getByRole("button", { name: "New plan" }).tap();
       await page.waitForFunction(() => !document.querySelector('button[aria-label^="Take "]'), null, { timeout: 8000 }).catch(() => {});
       ok("new plan: every dinner comes off", (await page.getByRole("button", { name: /^Take .* off the plan$/ }).count()) === 0 && (await page.getByRole("button", { name: /^One less / }).count()) === 0);
       const listAfter = await listNow();
       ok("new plan: every list is emptied, hand-added things too", listAfter.length === 0 && listBefore.length > 0, `${listBefore.length} → ${listAfter.length}`);
-      ok("meals: nothing on Meals says week", !/\bweek\b/i.test(await page.locator("main").innerText()));
+      // With nothing planned, Meals offers the one way in: two favorites and two new ones.
+      ok("meals: with nothing planned, Plan the week is offered", await page.getByRole("button", { name: /^(Plan the week|Finding new recipes)$/ }).isVisible());
     }
 
     // A request budget (Nov 11: bursts of reloads went over Google's limits). Going round the tabs twice in a row: the
@@ -303,7 +305,7 @@ const SIZES = [["light", 390, 844, true], ["dark", 390, 844, true], ["light", 82
     await page.getByLabel("Add something to Stock").fill(`frozen waffles ${tag}`); await page.keyboard.press("Enter");
     ok(`${tag}: Stock add`, await seen(page.getByRole("group", { name: new RegExp(`Have or need frozen waffles ${tag}`, "i") })));
 
-    // Lists: All, Safeway, Trader Joe's, Costco. What's out in Stock is on its store's list.
+    // Lists: All, and one checklist per store. What's out in Stock is on its store's list.
     await tabBar.getByRole("button", { name: "Lists" }).tap(); await page.waitForTimeout(800);
     await settingsHere("Lists");
     ok(`${tag}: Lists has the store switch and the add field`, (await page.getByRole("radio", { name: "All" }).isVisible()) && (await page.getByLabel("Add something").isVisible()));
@@ -316,9 +318,8 @@ const SIZES = [["light", 390, 844, true], ["dark", 390, 844, true], ["light", 82
     ok(`${tag}: no Clear on Lists`, (await page.getByRole("button", { name: "Clear", exact: true }).count()) === 0);
     ok(`${tag}: ticking turns Done shopping on`, await page.getByRole("button", { name: "Done shopping" }).first().isEnabled());
     await page.getByRole("radio", { name: "Safeway" }).tap(); await page.waitForTimeout(800);
-    // No "connected" status (Nov 11: no timer keeps one fresh): Safeway shows its cart until a job goes unanswered.
-    ok(`${tag}: Safeway doesn't guess whether the helper's there`, (await page.getByText(/Can't reach Safeway right now|isn't connected/).count()) === 0);
-    ok(`${tag}: Safeway shows the top line`, await seen(page.getByText(/in the cart| got$/)));
+    // One store's list: a plain checklist, with how many have been got at the top.
+    ok(`${tag}: a store's list is a checklist`, await seen(page.getByText(/ got$|Nothing for /)));
     await page.screenshot({ path: `${dir}/5b-lists-safeway-${tag}.png` });
     // In the store, on All: Done shopping asks first; Cancel leaves it; Eggs stays off.
     await page.getByRole("radio", { name: "All" }).tap(); await page.waitForTimeout(600);

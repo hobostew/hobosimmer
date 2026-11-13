@@ -10,7 +10,6 @@ import path from "node:path";
 import { appendRows, ensureTab, readTabIfAny, readTabsIfAny, replaceTab, sheetsConfigured, updateRanges } from "./google/sheets";
 import { loadHousehold } from "./data";
 import { addItems, dropHighlightsNotFor, emptyLists, takeOffFor, type Store } from "./groceries";
-import { loadCart } from "./safeway";
 import { parseCsv, records } from "./parse";
 import { loadRecipes, type Recipe } from "./recipes";
 import { addDays, todayIn } from "./time";
@@ -141,14 +140,6 @@ function lastMadeFrom(madeLog: string[][], done: { recipe: string; date: string 
   return out;
 }
 
-/** The rhythm (docs/PLAN.md, section 4.7): Trader Joe's about every two weeks and Costco about monthly, from the last finished trip. */
-function tripsDue(trips: string[][], today: string) {
-  const last = (store: Store) => records(trips).filter((r) => r.get("store") === store).map((r) => r.get("date")).sort().pop() ?? "";
-  const since = (d: string) => (d ? Math.round((Date.parse(today) - Date.parse(d)) / 864e5) : Infinity);
-  const tj = last("trader-joes"), costco = last("costco");
-  return { traderJoes: since(tj) >= 11, costco: since(costco) >= 25, lastTraderJoes: tj, lastCostco: costco };
-}
-
 export type PlanData = {
   /** Still to make, oldest first. */
   dishes: Dish[];
@@ -157,7 +148,6 @@ export type PlanData = {
   /** What was asked for last time, to start from. */
   counts: Counts;
   lastMade: Record<string, string>;
-  trips: ReturnType<typeof tripsDue>;
   lunchOptions: LunchOption[];
   people: (Taste & { rules: string[] })[];
   freezer: Frozen[];
@@ -181,7 +171,7 @@ export async function loadPlan(): Promise<PlanData> {
   return planFrom(tabs);
 }
 
-function planFrom({ planned, plan, made, trips, options, counts, hh, freezer }: Tabs): PlanData {
+function planFrom({ planned, plan, made, options, counts, hh, freezer }: Tabs): PlanData {
   const p = toPlanned(planned);
   const lunchOptions = toOptions(options);
   const kids = hh.profile.people.filter((x) => !x.isAdult && lunchOptions.some((o) => norm(o.kid) === norm(x.name))).map((x) => x.name);
@@ -189,7 +179,6 @@ function planFrom({ planned, plan, made, trips, options, counts, hh, freezer }: 
     dishes: p.dishes, lunches: p.lunches,
     counts: countsFrom(counts, kids),
     lastMade: lastMadeFrom(made, p.done, plan),
-    trips: tripsDue(trips, todayIn()),
     lunchOptions,
     people: hh.profile.people.map((x) => ({ name: x.name, isAdult: x.isAdult, likes: x.likes, dislikes: x.dislikes, rules: x.rules })),
     freezer,
@@ -270,9 +259,9 @@ const needFor = (r: Recipe, freezer: Frozen[]): Need[] =>
  */
 async function takeOffDishes(recipeIds: string[], still: Set<string> = new Set(), read?: { recipes: Recipe[]; freezer: Frozen[] }): Promise<number> {
   if (!recipeIds.length) return 0;
-  const [recipes, freezer, cart] = await Promise.all([read?.recipes ?? loadRecipes(), read?.freezer ?? loadFreezer(), loadCart().catch(() => [])]);
+  const [recipes, freezer] = await Promise.all([read?.recipes ?? loadRecipes(), read?.freezer ?? loadFreezer()]);
   const needs = recipeIds.flatMap((id) => { const r = recipes.find((x) => x.id === id); return r ? needFor(r, freezer).map((n) => ({ ...n, stay: still.has(id) })) : []; });
-  return takeOffFor(needs, new Set(cart.map((l) => l.itemId).filter(Boolean)));
+  return takeOffFor(needs);
 }
 
 export type NewDish = Pick<Dish, "kind" | "recipe" | "pinned">;
@@ -365,16 +354,13 @@ export async function markMade(id: string) {
 
 /**
  * New plan: a fresh start for the whole app (Nov 11). Every dinner comes off, logged as made on the day it was planned
- * (nothing is ticked off), so "last made" stays true; every list is emptied, except what's in the Safeway cart. Answers
- * how many list lines came off.
+ * (nothing is ticked off), so "last made" stays true; every list is emptied. Answers how many list lines came off.
  */
 export async function clearPlanned(): Promise<{ removed: number }> {
   const today = todayIn();
   const before = await rows(PLANNED);
   const dishes = toPlanned(before).dishes;
-  const cart = await loadCart().catch(() => []);
-  const held = new Set(cart.map((l) => l.itemId).filter(Boolean));
-  const removed = await emptyLists(held);
+  const removed = await emptyLists();
   if (!dishes.length) return { removed };
   const added = new Map(records(before).map((r) => [r.get("id"), r.get("added") || today]));
   await upsert(PLANNED, dishes.map((d) => ({ id: d.id, made: added.get(d.id) ?? today })), ["id"], before);
@@ -418,13 +404,12 @@ export async function removePlanned(id: string): Promise<{ removed: number }> {
   return { removed: dish ? await takeOffDishes([dish.recipe], still) : 0 };
 }
 
-/** The freezer and when the next trips are, for the Groceries tab. */
+/** What's in the freezer, for Stock. */
 export async function loadKitchen() {
-  const [freezer, trips] = await Promise.all([loadFreezer(), rows(TRIPS)]);
-  return { freezer, trips: tripsDue(trips, todayIn()) };
+  return { freezer: await loadFreezer() };
 }
 
-/** A finished trip (Done shopping), for the store rhythm. */
+/** A finished trip (Done shopping), written down for whatever looks back later. */
 export const recordTrip = (store: Store) => append(TRIPS, [{ date: todayIn(), store }]);
 
 // ---- the freezer (docs/PLAN.md, section 4.6)

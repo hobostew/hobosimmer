@@ -62,7 +62,6 @@ export type Context = {
   /** Recipe id → the last date it was made. */
   lastMade: Record<string, string>;
   people: Taste[];
-  trips: { traderJoes: boolean; costco: boolean };
   freezer?: Frozen[];
   /** The day it's planned on: what was made lately and what's in season are counted from here. */
   today: string;
@@ -79,10 +78,10 @@ const hasDislike = (r: Recipe, words: string[]) => words.some((w) => {
 
 /**
  * The recipes of one kind that fit, best first, with a few words on why. Code, not the model: the kind matches (a quick
- * dinner is never a regular one), nothing already planned, anything made in the last 10 days (4 for the boys' own) only
- * when nothing else fits (Nov 3: a short collection, with every planned week counted as made, would leave nights empty), the
- * right store trips, variety of protein with what's planned, forgotten favorites and the season lifted, the boys' tastes
- * respected. `planned`: recipe ids already planned (still to make, or picked just now).
+ * dinner is never a regular one), nothing already planned, nothing hidden ("Never again"), anything made in the last 10
+ * days (4 for the boys' own) only when nothing else fits (Nov 3: a short collection, with every planned week counted as
+ * made, would leave nights empty), variety of protein with what's planned, forgotten favorites and the season lifted,
+ * the boys' tastes respected. `planned`: recipe ids already planned (still to make, or picked just now).
  */
 export function rank(kind: Kind, planned: string[], ctx: Context): Option[] {
   const used = new Set(planned.filter(Boolean));
@@ -92,9 +91,7 @@ export function rank(kind: Kind, planned: string[], ctx: Context): Option[] {
   const dinner = kind === "quick" || kind === "regular";
   const out: Option[] = [];
   for (const r of ctx.recipes) {
-    if (!r.active || used.has(r.id) || kindOf(r) !== kind) continue;
-    if (r.store === "trader-joes" && !ctx.trips.traderJoes) continue;
-    if (r.store === "costco" && !ctx.trips.costco) continue;
+    if (!r.active || r.hidden || used.has(r.id) || kindOf(r) !== kind) continue;
     const last = ctx.lastMade[r.id];
     const ago = last ? daysBetween(last, ctx.today) : null;
     const recent = ago !== null && ago >= 0 && ago < (kind === "kids" ? 4 : 10);
@@ -118,7 +115,6 @@ export function rank(kind: Kind, planned: string[], ctx: Context): Option[] {
         const lift = 1.5 + Math.min(weeks / 8, 1); // the longer it's been in there, the more it's worth using
         score += lift; why.push([lift + 1, `Uses the ${frozen.item.toLowerCase()} in the freezer`]);
       }
-      if (r.store === "trader-joes") { score += 0.5; why.push([0.5, "From this week's Trader Joe's trip"]); }
       if (r.makeAhead && kind === "regular") score += 0.2;
     } else if (kind === "kids") {
       if (hasDislike(r, kids.flatMap((k) => k.dislikes))) score -= 3;
@@ -152,6 +148,49 @@ export function pickMany(counts: Partial<Record<Kind, number>>, planned: string[
     used.push(top.recipe.id);
   }
   return out;
+}
+
+/** A favorite: one of ours, cooked before. New: found since and not cooked yet. */
+export const isFavorite = (r: Pick<Recipe, "favorite" | "hidden">) => r.favorite && !r.hidden;
+export const isNew = (r: Pick<Recipe, "tried" | "hidden">) => !r.tried && !r.hidden;
+
+/** How a week is made up: so many favorites to come back to, and so many new ones to try. */
+export type Mix = { favorites: number; fresh: number };
+export const WEEK: Mix = { favorites: 2, fresh: 2 };
+
+/**
+ * A week's dinners: `mix.favorites` from the favorites and `mix.fresh` from the ones never cooked yet, best first,
+ * each pick shaping the variety of the next (the same protein twice running counts against the second). Plain code, so
+ * the same collection always gives the same week. Fewer come back when there aren't enough to choose from; the caller
+ * (Meals) finds more new ones on the web first, so `fresh` usually can be filled.
+ *
+ * Quick and regular are still how a dinner is counted once it's planned, so the rest of Simmer doesn't change: what
+ * decides a week now is favorite or new, not quick or regular.
+ */
+export function planWeek(mix: Mix, planned: string[], ctx: Context): Choice[] {
+  const out: Choice[] = [];
+  const used = [...planned];
+  const take = (want: number, fits: (r: Recipe) => boolean, why: string) => {
+    for (let i = 0; i < want; i++) {
+      // Both kinds of dinner are in the running; the kind is only how it's written down.
+      const best = (["quick", "regular"] as const)
+        .flatMap((k) => rank(k, used, { ...ctx, recipes: ctx.recipes.filter(fits) }).slice(0, 1).map((o) => ({ kind: k, o })))
+        .sort((a, b) => b.o.score - a.o.score)[0];
+      if (!best) return;
+      out.push({ kind: best.kind, recipe: best.o.recipe.id, why: best.o.why || why });
+      used.push(best.o.recipe.id);
+    }
+  };
+  take(mix.favorites, isFavorite, "One of yours");
+  take(mix.fresh, isNew, "New to try");
+  return out;
+}
+
+/** How many new recipes a week still needs from the web: what's wanted, less the untried ones already here. */
+export function needNew(mix: Mix, recipes: Recipe[], planned: string[]): number {
+  const used = new Set(planned);
+  const have = recipes.filter((r) => r.active && isNew(r) && !used.has(r.id) && kindOf(r) !== null && isDinner(r)).length;
+  return Math.max(0, mix.fresh - have);
 }
 
 /**

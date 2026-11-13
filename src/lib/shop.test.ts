@@ -1,87 +1,24 @@
 import { describe, expect, it } from "vitest";
-import { addedFor, buyAmount, needBeside, cartTotal, findItems, firstToFind, inCartLine, nextAfter, nextToFind, priceOf, rankResults } from "./shop";
-import type { Item } from "./groceries";
-import type { CartLine } from "./safeway";
+import { buyAmount } from "./shop";
 
-const item = (id: string, name: string, extra: Partial<Item> = {}): Item => ({ id, item: name, quantity: "", store: "safeway", section: "fresh", for: "", addedBy: "", addedAt: "", checked: false, check: false, ...extra });
-const line = (productId: string, itemId: string, qty: number, price = "$1.00"): CartLine => ({ cart: "safeway", productId, name: productId, price, image: "", qty, itemId, item: "", updated: "" });
-
-describe("Find", () => {
-  const items = [item("a", "milk", { quantity: "2" }), item("b", "pop tarts"), item("c", "salt", { check: true }), item("d", "lemons", { checked: true }), item("e", "dressing", { store: "trader-joes" }), item("f", "eggs")];
-  const staples = [{ item: "milk", store: "safeway" as const, section: "fresh" as const, quantity: "1", product: "Lucerne 2% milk half gallon" }];
-
-  it("goes through the Safeway items still needed, with Simmer's own search", () => {
-    const f = findItems(items, staples, [{ item: "Pop Tarts", id: "77", name: "Pop-Tarts Frosted Strawberry" }]);
-    expect(f.map((x) => x.item)).toEqual(["milk", "pop tarts", "eggs"]);
-    expect(f[0]).toMatchObject({ query: "milk", usual: "Lucerne 2% milk half gallon", want: 2 });
-    expect(f[1]).toMatchObject({ query: "pop tarts", picked: { id: "77" } });
-  });
-
-  it("puts a product in the cart for the item showing only when it's plausibly that item", () => {
-    const [, pop] = findItems(items, staples, [{ item: "Pop Tarts", id: "77", name: "Pop-Tarts Frosted Strawberry" }]);
-    const eggs = { id: "9", name: "O Organics Organic Eggs Large Brown - 18 Count", price: "", image: "" };
-    const tarts = { id: "8", name: "Pop-Tarts Toaster Pastries Frosted", price: "", image: "" };
-    expect(addedFor(tarts, pop, "toaster pastries")?.id).toBe("b");
-    expect(addedFor(eggs, pop, "pop tarts")?.id).toBe("b"); // its own search: whatever it found
-    expect(addedFor(eggs, pop, "eggs")).toBeNull(); // something else typed in its search box
-    expect(addedFor({ ...eggs, id: "77" }, pop, "eggs")?.id).toBe("b"); // its remembered product
-  });
-
-  it("starts on the first item with nothing in the cart, and moves on to the next", () => {
-    const f = findItems(items, staples, []);
-    expect(firstToFind(f, [line("1", "a", 2)])).toBe(1);
-    expect(nextToFind(f, [line("1", "a", 2), line("2", "b", 1)], 0)).toBe(2);
-    expect(nextToFind(f, [line("2", "f", 1)], 1)).toBe(-1);
-    expect(firstToFind(f, f.map((x, i) => line(String(i), x.id, 1)))).toBe(0);
-  });
-
-  it("goes Next to the next item still to find, then back to one skipped, then the cart", () => {
-    const f = findItems(items, staples, []); // milk, pop tarts, eggs
-    expect(nextAfter(f, [line("1", "a", 1)], 0)).toBe(1);
-    expect(nextAfter(f, [line("1", "a", 1), line("2", "b", 1)], 0)).toBe(2);
-    expect(nextAfter(f, [line("3", "f", 1)], 2)).toBe(0); // the last one: back to the first still to find
-    expect(nextAfter(f, f.map((x, i) => line(String(i), x.id, 1)), 1)).toBe(-1);
-  });
-
-  it("shows the usual first, then the closest matches", () => {
-    const products = [{ id: "1", name: "Oatly Oat Milk", price: "", image: "" }, { id: "2", name: "Lucerne Milk 2% 1/2 Gallon", price: "", image: "" }, { id: "3", name: "Lucerne Milk 2% 1 Gallon", price: "", image: "" }];
-    expect(rankResults(products, { picked: { id: "3" }, item: "milk" }).map((r) => [r.product.id, r.usual])).toEqual([["3", true], ["1", false], ["2", false]]);
-    // No remembered product: a clear match with the house's usual one is marked.
-    expect(rankResults(products, { usual: "Lucerne 2% milk 1/2 gallon", item: "milk" })[0]).toMatchObject({ product: { id: "2" }, usual: true });
-    // Nothing clear: none marked.
-    expect(rankResults(products, { item: "milk" }).some((r) => r.usual)).toBe(false);
-  });
-});
-
-describe("the cart", () => {
-  it("adds up, and says when it's only an estimate", () => {
-    expect(priceOf("$0.29 each")).toBe(0.29);
-    expect(priceOf("about")).toBeNull();
-    expect(cartTotal([line("1", "a", 2, "$3.49"), line("2", "b", 1, "$1.00")])).toEqual({ total: 7.98, estimate: false });
-    expect(cartTotal([line("1", "a", 1, "$4.99 /lb")]).estimate).toBe(true);
-  });
-
-  it("shows on the list what's in the cart for an item", () => {
-    expect(inCartLine([line("1", "a", 2)], { id: "a" })).toBe("In the cart · 2");
-    expect(inCartLine([line("1", "a", 2)], { id: "b" })).toBe("");
-  });
-});
-
-describe("amounts on Safeway rows (Nov 3)", () => {
-  it("keeps weights and counts, drops spoons, cups and recipe names", () => {
+describe("what a list row shows for an amount", () => {
+  it("keeps weights and counts, in nice fractions", () => {
+    expect(buyAmount("2")).toBe("2");
     expect(buyAmount("1 1/2 lb")).toBe("1½ lb");
-    expect(buyAmount("1/2 lb (Tacos)")).toBe("½ lb");
-    expect(buyAmount("8")).toBe("8");
-    expect(buyAmount("2 lb, for Chili")).toBe("2 lb");
-    expect(buyAmount("2 cans")).toBe("2 cans");
-    expect(buyAmount("a dozen")).toBe("a dozen");
-    for (const q of ["15 ounce", "16 ounces", "1 (15 oz) can", "500 g", "14.5 oz"]) expect(buyAmount(q)).toBe(q.includes("can") ? "1 can" : "");
-    expect(needBeside("2", "Lucerne Large Eggs 18 Count", 1)).toBe("");
-    expect(needBeside("24", "Lucerne Large Eggs 18 Count", 1)).toBe("24");
-    expect(needBeside("3", "Bananas", 1)).toBe("3");
-    expect(needBeside("1", "Keebler Ready Crust 10-Inch Pie Crust - 9 Oz", 1)).toBe("");
-    expect(needBeside("3", "Bananas", 3)).toBe("");
-    expect(needBeside("1½ lb", "Ground Beef 1 lb", 1)).toBe("1½ lb");
-    for (const q of ["2 tbsp", "1 cup", "1/2 teaspoon", "1 Tablespoon", "a pinch", "3 cloves", "to taste", "", "some"]) expect(buyAmount(q)).toBe("");
+    expect(buyAmount("1/2 lb")).toBe("½ lb");
+    expect(buyAmount("1 dozen")).toBe("1 dozen");
+  });
+  it("drops amounts that don't change what's bought", () => {
+    expect(buyAmount("2 tbsp")).toBe("");
+    expect(buyAmount("1/4 cup")).toBe("");
+    expect(buyAmount("2 cloves")).toBe("");
+    expect(buyAmount("to taste")).toBe("");
+    // A can's size is what the package holds, not how many to buy.
+    expect(buyAmount("15 oz")).toBe("");
+    expect(buyAmount("")).toBe("");
+  });
+  it("leaves the recipe's name out of it", () => {
+    expect(buyAmount("2 (Tacos)")).toBe("2");
+    expect(buyAmount("1 lb, for chili")).toBe("1 lb");
   });
 });

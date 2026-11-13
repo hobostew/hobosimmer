@@ -2,16 +2,21 @@
 import { useMemo, useRef, useState } from "react";
 import type { Dish, Kind, NewDish, PlanData, Recipe } from "@/lib/client";
 import { searchRecipes } from "@/lib/search";
-import { KIND_NAMES, KINDS, kindOf } from "@/lib/week";
+import { isNew, KIND_NAMES, KINDS, kindOf, WEEK } from "@/lib/week";
 import { Icon, type IconName } from "./icons";
-import { BrandBar, ConfirmSheet, Group, Held, Row, Sheet } from "./ui";
+import { BrandBar, Button, ConfirmSheet, Group, Held, Row, Sheet } from "./ui";
 
-// The Meals tab is this week's dinners, in any order, by kind; she picks them from her recipes (Nov 10: Simmer doesn't
-// pick meals itself). Lunches aren't planned here: lunch foods are Stock things.
+// The Meals tab is this week's dinners, in any order, by kind. Plan the week fills it: two of theirs to come back to
+// and two new ones found on the web (lib/week.ts planWeek, lib/discover.ts); anything can also be added by hand.
+// Lunches aren't planned here: lunch foods are Stock things.
 
 /** A meal's name: the recipe's, or the free text she typed. */
 export const mealName = (id: string, recipes: Recipe[]) => recipes.find((r) => r.id === id)?.name ?? id;
 
+/** New to the house: found since, never cooked. Shown so a week's new ones are easy to tell apart. */
+function NewMark({ where }: { where?: string }) {
+  return <span className="t-foot font-semibold text-accent">{where ? `New · ${where}` : "New"}</span>;
+}
 
 // ---- Meals (tab)
 
@@ -25,12 +30,16 @@ const ONE: Record<Kind, string> = { quick: "a quick dinner", regular: "a regular
  * what a new dinner needs goes on, and what only a dinner taken off needed comes off, unless it's ticked off or in the
  * cart (server side, lib/plan.ts).
  */
-export function MealsScreen({ plan, recipes, dinnerGroceries, onOpen, onRemove, onCount, onAdd, onNewPlan }: {
+export function MealsScreen({ plan, recipes, dinnerGroceries, onOpen, onRemove, onCount, onAdd, onNewPlan, onPlanWeek, planning }: {
   plan: PlanData | null; recipes: Recipe[];
   /** How many lines are on the lists: what New plan empties. */
   dinnerGroceries: number;
   // No note bar after a change (Matt, Nov 10: it made the page jump); the dinners and counts show what changed.
   onOpen: (d: Dish) => void; onRemove: (d: Dish) => void; onCount: (d: Dish, count: number) => Promise<unknown>; onAdd: (kind: Kind) => void; onNewPlan: () => void;
+  /** Plan the week: two of theirs and two new ones, found on the web first when there aren't enough new ones here. */
+  onPlanWeek: () => void;
+  /** A week being planned: looking for new recipes takes a while, so the button rests until it's done. */
+  planning: boolean;
 }) {
   const dishes = plan?.dishes ?? [];
   const [taking, setTaking] = useState<Dish | null>(null); // waiting on "Take it off?"
@@ -73,6 +82,16 @@ export function MealsScreen({ plan, recipes, dinnerGroceries, onOpen, onRemove, 
       )} />
       <h1 className="sr-only">Meals</h1>
       {!plan && <Held groups={[2, 2, 1]} />}
+      {/* Nothing planned: the one way in. Two of theirs and two to try, with the new ones looked for first. */}
+      {plan && !dishes.length && (
+        <div className="space-y-3 pt-2 text-center">
+          <p className="t-title">This week</p>
+          <p className="mx-auto max-w-[17rem] t-sub text-muted">
+            {`${WEEK.favorites} of your favorites and ${WEEK.fresh} new ones to try, with everything they need on the list.`}
+          </p>
+          <Button onClick={onPlanWeek} disabled={planning} icon="sparkle" className="mx-auto">{planning ? "Finding new recipes" : "Plan the week"}</Button>
+        </div>
+      )}
       {plan && (
         <>
           {KINDS.map((k) => {
@@ -89,7 +108,7 @@ export function MealsScreen({ plan, recipes, dinnerGroceries, onOpen, onRemove, 
                   return (
                     <div key={d.recipe} className="flex items-center gap-1.5 pr-3">
                       <div className="min-w-0 flex-1">
-                        <Row title={name} onClick={r ? () => onOpen(d) : undefined} />
+                        <Row title={name} subtitle={r && isNew(r) ? <NewMark where={r.foundAt} /> : undefined} onClick={r ? () => onOpen(d) : undefined} />
                       </div>
                       <RoundButton quiet icon="minus" label={n > 1 ? `One less ${name}` : `Take ${name} off the plan`} onClick={() => tap(d, -1)} />
                       <span className="w-5 text-center t-headline tabular-nums" aria-label={`${name}: ${n}`}>{n}</span>

@@ -36,10 +36,11 @@ const PATHS = {
 
 export type IconName = keyof typeof PATHS;
 
-export function Icon({ name, className = "size-5", strokeWidth = 1.7 }: { name: IconName; className?: string; strokeWidth?: number }) {
+/** `filled`: the shape is filled in as well as drawn (the heart on a favorite). */
+export function Icon({ name, className = "size-5", strokeWidth = 1.7, filled = false }: { name: IconName; className?: string; strokeWidth?: number; filled?: boolean }) {
   return (
     <svg viewBox="0 0 24 24" className={`shrink-0 ${className}`} aria-hidden>
-      <path d={PATHS[name]} fill="none" stroke="currentColor" strokeWidth={name === "more" ? 3.4 : strokeWidth} strokeLinecap="round" strokeLinejoin="round" />
+      <path d={PATHS[name]} fill={filled ? "currentColor" : "none"} stroke="currentColor" strokeWidth={name === "more" ? 3.4 : strokeWidth} strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }

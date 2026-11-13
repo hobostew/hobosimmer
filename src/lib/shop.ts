@@ -1,126 +1,18 @@
-// The Shop tab's logic, kept out of the screens so it can be tested: which list items Find goes through and in what
-// order, how search results are ordered (the usual first), what's in the cart for an item, and the cart's total.
-import { prepare, score } from "./safeway-helper.mjs";
-import { norm } from "./words";
-import type { Item, Staple } from "./groceries";
-import type { CartLine, Pick } from "./safeway";
+// The Lists tab's logic, kept out of the screens so it can be tested: how a list item's amount reads on a row.
 
-export type Product = { id: string; name: string; price: string; image: string; inCart?: boolean; qty?: number };
-/** One list item to find: what to search for first, how many, and its remembered product. */
-export type FindItem = { id: string; item: string; quantity: string; usual: string; picked: { id: string; name: string; image?: string } | null; query: string; want: number };
-
-/** The Safeway items Find goes through, in the list's order: unchecked, leaving out the "check you have these" ones. */
-export function findItems(items: Item[], staples: Staple[], picks: Pick[]): FindItem[] {
-  return prepare({ items, staples }, picks) as FindItem[];
-}
-
-/**
- * Which list item a product added from Find is for: the item showing, unless the words searched were typed in for
- * something else (the product shares no word with the item or its usual product and isn't its remembered one). Then
- * it goes in the cart for no item, and doesn't become the item's usual.
- */
-export function addedFor<I extends { id: string; item: string; usual: string; query: string; picked: { id: string } | null }>(p: { id: string; name: string }, it: I, query: string): I | null {
-  const same = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
-  if (same(query, it.query) || it.picked?.id === p.id) return it;
-  return score(p.name, it.item) > 0 || (it.usual && score(p.name, it.usual) > 0) ? it : null;
-}
-
-/** What's in the cart for a list item (by the item it was added for). */
-export const cartFor = (cart: CartLine[], itemId: string) => cart.filter((l) => l.itemId === itemId);
-export const qtyFor = (cart: CartLine[], itemId: string) => cartFor(cart, itemId).reduce((n, l) => n + l.qty, 0);
-
-/** Where "Find them at Safeway" starts: the first item with nothing in the cart yet (else the first). */
-export function firstToFind(items: FindItem[], cart: CartLine[]): number {
-  const i = items.findIndex((it) => !qtyFor(cart, it.id));
-  return i < 0 ? 0 : i;
-}
-
-/** The next item after `from` with nothing in the cart yet, or -1 when every one after it has something. */
-export function nextToFind(items: FindItem[], cart: CartLine[], from: number): number {
-  for (let i = from + 1; i < items.length; i++) if (!qtyFor(cart, items[i].id)) return i;
-  return -1;
-}
-
-/**
- * Search results in the order to show them: the remembered product first, marked as the usual; without one, a result
- * that clearly matches the house's usual product is marked instead. The rest by how well they match, Safeway's own
- * order breaking ties (so a sponsored result that matches no better doesn't jump ahead).
- */
-export function rankResults<P extends Product>(products: P[], wanted: { picked?: { id: string } | null; usual?: string; item: string }): { product: P; usual: boolean }[] {
-  const target = wanted.usual || wanted.item;
-  const ranked = products.map((p, i) => ({ p, i, s: score(p.name, target) })).sort((a, b) => b.s - a.s || a.i - b.i).map((r) => r.p);
-  let usualId = wanted.picked && products.some((p) => p.id === wanted.picked!.id) ? wanted.picked.id : "";
-  if (!usualId && wanted.usual && ranked.length) {
-    const s0 = score(ranked[0].name, wanted.usual), s1 = ranked[1] ? score(ranked[1].name, wanted.usual) : 0;
-    if (s0 >= 0.8 && s0 - s1 >= 0.2 - 1e-9) usualId = ranked[0].id;
-  }
-  const first = ranked.filter((p) => p.id === usualId);
-  return [...first, ...ranked.filter((p) => p.id !== usualId)].map((product) => ({ product, usual: product.id === usualId }));
-}
-
-/** "$3.49", "$0.29 each", "$4.99 /lb" → 3.49, 0.29, 4.99; nothing readable → null. */
-export function priceOf(s: string): number | null {
-  const m = String(s ?? "").match(/\$\s*(\d+(?:\.\d{1,2})?)/);
-  return m ? Number(m[1]) : null;
-}
-
-/** The cart's total, and whether it's only an estimate (something sold by weight, or a price that couldn't be read). */
-export function cartTotal(cart: CartLine[]): { total: number; estimate: boolean } {
-  let total = 0, estimate = false;
-  for (const l of cart) {
-    const p = priceOf(l.price);
-    if (p === null) { estimate = true; continue; }
-    if (/lb|per\b|\/\s*oz/i.test(l.price)) estimate = true;
-    total += p * l.qty;
-  }
-  return { total: Math.round(total * 100) / 100, estimate };
-}
-
-export const money = (n: number) => `$${n.toFixed(2)}`;
-
-/** A list item's line: "In the cart · 2" once something's in the cart for it. */
-export function inCartLine(cart: CartLine[], it: { id: string }): string {
-  const n = qtyFor(cart, it.id);
-  return n ? `In the cart · ${n}` : "";
-}
-
-/** The pick for an item, however the item is written. */
-export const pickFor = (picks: Pick[], item: string) => picks.find((p) => norm(p.item) === norm(item));
-
-/**
- * Where Find's Next goes from item `from`: the next item with nothing in the cart yet, else the first such item before
- * it, else -1 (everything's in the cart: the cart is next).
- */
-export function nextAfter(items: FindItem[], cart: CartLine[], from: number): number {
-  const after = nextToFind(items, cart, from);
-  if (after >= 0) return after;
-  const before = items.findIndex((it, i) => i < from && !qtyFor(cart, it.id));
-  return before;
-}
-
-// Amounts that don't change what's bought at Safeway: a recipe's spoons, cups and pinches, and parts of a thing (a
-// clove of garlic still means one head). Weights and counts do ("1½ lb", "8"). Nov 3.
-/** Can, tub and bag sizes from a recipe ("15 ounce", "16 oz", "500 g"): what the package holds, not how many to buy (Nov 3). */
+// Amounts that don't change what's bought: a recipe's spoons, cups and pinches, and parts of a thing (a clove of garlic
+// still means one head). Weights and counts do ("1½ lb", "8").
+/** Can, tub and bag sizes from a recipe ("15 ounce", "16 oz", "500 g"): what the package holds, not how many to buy. */
 const PACKAGE_SIZE = /\b(?:ounces?|oz|fl|ml|millilit(?:er|re)s?|grams?|g|kg|kilograms?|lit(?:er|re)s?|l)\b/i;
 const NOT_BUYING = /\b(?:cups?|tablespoons?|tbsps?|tbs|tbsp|teaspoons?|tsps?|tsp|pinch(?:es)?|dash(?:es)?|splash(?:es)?|sprinkles?|drizzles?|handfuls?|cloves?|sprigs?|leaves|leaf|to taste|as needed)\b/i;
 const FRACTIONS: Record<string, string> = { "1/2": "½", "1/4": "¼", "3/4": "¾", "1/3": "⅓", "2/3": "⅔", "1/8": "⅛" };
 
 /**
- * A list item's amount as a Safeway row shows it (Nov 3): only when it changes what's bought (a weight or a count),
- * never a recipe's name, and "" for spoons, cups and the like. "1 1/2 lb (Tacos)" → "1½ lb", "2 tbsp" → "", "8" → "8".
+ * A list item's amount as a row shows it: only when it changes what's bought (a weight or a count), never a recipe's
+ * name, and "" for spoons, cups and the like. "1 1/2 lb (Tacos)" → "1½ lb", "2 tbsp" → "", "8" → "8".
  */
 export function buyAmount(quantity: string): string {
   const q = String(quantity ?? "").replace(/\([^)]*\)/g, " ").split(/,|;|\s+for\s+/i)[0].replace(/\s+/g, " ").trim();
   if (!q || NOT_BUYING.test(q) || PACKAGE_SIZE.test(q) || !/\d|[½¼¾⅓⅔⅛]|\b(?:dozen|couple|few)\b/i.test(q)) return "";
   return q.replace(/\b(\d+)\s+(\d\/\d)\b/g, (m, n, f) => (FRACTIONS[f] ? `${n}${FRACTIONS[f]}` : m)).replace(/\b\d\/\d\b/g, (m) => FRACTIONS[m] ?? m);
-}
-
-/** How many one of a product holds: 12 for a dozen, 18 for "18 ct", else 1. */
-const holds = (product: string) => (/\bdozen\b/i.test(product) ? 12 : Number(product.match(/\b(\d+)\s*-?\s*(?:count|ct|pack|pk|pc|pieces?)\b/i)?.[1] ?? 0) || 1);
-
-/** "Need …" beside a cart line, or nothing when what's in the cart already covers a plain count (2 eggs, 18 in a carton;
- * 1 pie crust, 1 in the cart). */
-export function needBeside(quantity: string, product: string, qty: number): string {
-  const a = buyAmount(quantity);
-  return /^\d+$/.test(a) && holds(product) * Math.max(qty, 1) >= Number(a) ? "" : a;
 }
