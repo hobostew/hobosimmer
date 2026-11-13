@@ -119,4 +119,13 @@ describe("finding new recipes", () => {
     generateJson.mockResolvedValue({ data: { links: [] }, model: "test", sources: [] });
     await expect(findNew(2)).resolves.toEqual({ drafts: [], looked: 0 });
   });
+
+  it("gives back what it has when the time's up, rather than nothing", async () => {
+    const { findNew } = await import("./discover");
+    generateJson.mockResolvedValue(links("https://example.com/harissa", "https://example.com/miso"));
+    // A moment already past: it stops before opening anything and still answers.
+    const { drafts } = await findNew(2, undefined, Date.now() - 1);
+    expect(drafts).toEqual([]);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 });

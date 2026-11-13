@@ -90,10 +90,14 @@ async function verify(c: Candidate, have: Recipe[], t: Taste, signal?: AbortSign
   return { ...d, source: c.url, foundAt: hostOf(c.url), favorite: false, tried: false, hidden: false };
 }
 
-/** Runs `work` over `items` a few at a time, stopping as soon as `enough` of them have come back. */
-async function someOf<I, O>(items: I[], work: (i: I) => Promise<O | null>, enough: number): Promise<O[]> {
+/**
+ * Runs `work` over `items` a few at a time, stopping as soon as `enough` have come back — or when `by` passes, so a
+ * slow search gives back what it has rather than being cut off by the server's time limit with nothing.
+ */
+async function someOf<I, O>(items: I[], work: (i: I) => Promise<O | null>, enough: number, by?: number): Promise<O[]> {
   const out: O[] = [];
   for (let i = 0; i < items.length && out.length < enough; i += AT_ONCE) {
+    if (by && Date.now() > by) break;
     const batch = await Promise.all(items.slice(i, i + AT_ONCE).map(work));
     for (const r of batch) if (r !== null && out.length < enough) out.push(r);
   }
@@ -103,9 +107,10 @@ async function someOf<I, O>(items: I[], work: (i: I) => Promise<O | null>, enoug
 /**
  * New recipes to try this week: what the house likes turned into a search, the links it finds opened and read here,
  * and the ones that turn out to be real, new dinners answered as drafts (not saved: the caller decides). `looked` is
- * how many links were opened, so the screen can say when a search came back thin.
+ * how many links were opened, so the screen can say when a search came back thin. `by`: a moment to be finished by
+ * (the server's time limit), after which it answers with whatever it has.
  */
-export async function findNew(want: number, signal?: AbortSignal): Promise<{ drafts: Draft[]; looked: number }> {
+export async function findNew(want: number, signal?: AbortSignal, by?: number): Promise<{ drafts: Draft[]; looked: number }> {
   if (want < 1) return { drafts: [], looked: 0 };
   const [all, hh] = await Promise.all([loadRecipes(), loadHousehold()]);
   const taste = tasteOf(all, hh.profile);
@@ -120,6 +125,6 @@ export async function findNew(want: number, signal?: AbortSignal): Promise<{ dra
     // Kept as we go, so two pages for the same dish don't both come back.
     have.push({ name: r.name } as Recipe);
     return r;
-  }, want);
+  }, want, by);
   return { drafts, looked };
 }

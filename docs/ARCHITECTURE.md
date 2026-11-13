@@ -120,14 +120,28 @@ Everything comes from `components/ui.tsx`, so every screen looks and behaves the
   isn't a dependency: `npm install --no-save playwright && npx playwright install chromium`.
 - After changing `public/icon.svg`: `npm run icons`.
 
-## Setting up production
+## Deploying it
 
-1. A Vercel project linked to this repo, with an Upstash Redis store attached (Vercel sets `KV_REST_API_URL` and
-   `KV_REST_API_TOKEN` itself).
-2. `HOUSEHOLD_PASSCODE`, `HOUSEHOLD_TZ` and `GEMINI_API_KEY` set in Vercel (see `.env.example`). The passcode and the
-   key are secrets: they stay in Vercel, never in code, because code is copied everywhere and git keeps every version
-   forever.
-3. Put the household in `data/profile.csv`, then fill the new Redis once:
-   `vercel env pull .env.local && node --env-file=.env.local scripts/seed.mjs --write`.
-4. Open the app, and add the favorites: Recipes → Add recipes → From links, pasting as many recipe links as you like,
-   one per line. Those become the taste Simmer plans and searches from.
+Everything below is done once. Steps 1–3 need a browser; the rest is here.
+
+1. **A Gemini key.** [aistudio.google.com/apikey](https://aistudio.google.com/apikey) → Create API key. The free tier
+   is plenty for a household. It's only needed to find new recipes and to read a page that won't open for us.
+2. **The Vercel project.** `npx vercel login`, then `npx vercel link` (or import the repo at vercel.com). The project
+   builds with no configuration: `next build`, nothing else.
+3. **A Redis store.** In the project on vercel.com: Storage → Create → Upstash Redis (the free tier is ample: this is
+   a few kilobytes of rows). Connecting it sets `KV_REST_API_URL` and `KV_REST_API_TOKEN` for you.
+4. **The three variables**, in Settings → Environment Variables, for Production, Preview and Development:
+   `HOUSEHOLD_PASSCODE` (what each phone types once), `HOUSEHOLD_TZ` (an IANA name like `America/Los_Angeles`), and
+   `GEMINI_API_KEY`. The passcode and the key are secrets: they stay in Vercel, never in the repo, because code is
+   copied everywhere and git keeps every version forever.
+5. **Deploy**, with `npx vercel --prod` or by pushing to the default branch.
+6. **Fill the new Redis**, which starts empty — including the household, without which nobody can be planned for:
+   `npx vercel env pull .env.local` then `node --env-file=.env.local scripts/seed.mjs` to see what it would write, and
+   again with `--write` to do it. (`.env.local` is git-ignored; delete it afterwards if you like.)
+7. **Open it, type the passcode, and add the favorites**: Recipes → Add recipes → From links, pasting as many recipe
+   links as you like, one per line. Those become the taste Simmer plans and searches from. Then Meals → Plan the week.
+8. **Add it to the home screen** on each phone: open the address in Safari, Share, Add to Home Screen.
+
+A note on timing: finding new recipes is a web search followed by several pages being opened, and Vercel's free plan
+stops a request at 60 seconds. `/api/recipes/discover` works to a 50-second budget and answers with whatever it found
+by then, so a slow search comes back with one recipe rather than an error. On a paid plan both numbers can go up.

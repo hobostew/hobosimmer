@@ -4,8 +4,11 @@ import { authorized, unauthorized } from "@/lib/auth";
 import { findNew } from "@/lib/discover";
 import { fromDraft, loadRecipes, saveRecipes } from "@/lib/recipes";
 
-// A search, then a handful of pages opened and read: the slowest thing Simmer does. The app runs it through wait().
-export const maxDuration = 120;
+// A search, then a handful of pages opened and read: the slowest thing Simmer does. 60 seconds is what Vercel's free
+// plan allows, so that's the budget; findNew gives back whatever it has when the time's nearly up rather than being
+// cut off with nothing. On a paid plan this can go higher.
+export const maxDuration = 60;
+const BUDGET_MS = 50_000;
 
 /**
  * POST { want }: that many new recipes found on the web, like the favorites, read from their own pages and saved
@@ -17,7 +20,7 @@ export async function POST(req: Request) {
   const b = await req.json().catch(() => null);
   try {
     const want = Math.max(1, Math.min(6, Math.round(Number(b?.want) || 2)));
-    const { drafts, looked } = await findNew(want, req.signal);
+    const { drafts, looked } = await findNew(want, req.signal, Date.now() + BUDGET_MS);
     if (!drafts.length) throw new AppError("Couldn't find anything new just now. Try again in a minute.");
     // Saved as found: not favorites and not tried, which is what makes them new when the week is planned.
     const saved = await saveRecipes(drafts.map((d) => fromDraft(d)));
