@@ -120,6 +120,20 @@ describe("finding new recipes", () => {
     await expect(findNew(2)).resolves.toEqual({ drafts: [], looked: 0 });
   });
 
+  it("asks again without the search when the search is turned down", async () => {
+    const { findNew } = await import("./discover");
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    // Searching the web is its own allowance on a Google account, and not every key has it.
+    generateJson
+      .mockRejectedValueOnce(new Error("Gemini is busy right now. (429 rate limited)"))
+      .mockResolvedValueOnce(links("https://example.com/harissa"));
+    const { drafts } = await findNew(1);
+    expect(generateJson.mock.calls[0][2].search).toBe(true);
+    expect(generateJson.mock.calls[1][2].search).toBe(false);
+    // Still read off its own page, so a stale link from memory can't invent a recipe.
+    expect(drafts.map((d) => d.name)).toEqual(["Harissa chicken thighs"]);
+  });
+
   it("gives back what it has when the time's up, rather than nothing", async () => {
     const { findNew } = await import("./discover");
     generateJson.mockResolvedValue(links("https://example.com/harissa", "https://example.com/miso"));

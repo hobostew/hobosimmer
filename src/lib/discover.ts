@@ -56,11 +56,26 @@ export function searchPrompt(t: Taste, want: number): string {
   ].filter(Boolean).join("\n");
 }
 
-/** The links the model found. Only their shape is trusted; whether a page is real is settled by opening it. */
+/**
+ * The links the model found. Only their shape is trusted; whether a page is real is settled by opening it.
+ *
+ * Searching the web is the better way (the links are ones Google just saw), but it's a separate allowance on a Google
+ * account and not every key has it. When the search is turned down, the model is asked again without it, from what it
+ * already knows: more of those links will be stale, which costs nothing, because every one is opened and read here
+ * before it can become a recipe.
+ */
 async function candidates(t: Taste, want: number): Promise<Candidate[]> {
-  const { data } = await generateJson<{ links: Candidate[] }>(
-    searchPrompt(t, want), LINKS_SCHEMA, { search: true, timeoutMs: 45_000 },
+  const ask = (search: boolean) => generateJson<{ links: Candidate[] }>(
+    search ? searchPrompt(t, want) : `${searchPrompt(t, want)}\nUse addresses of real recipe pages you are confident exist.`,
+    LINKS_SCHEMA, { search, timeoutMs: 45_000 },
   );
+  let data: { links: Candidate[] };
+  try {
+    ({ data } = await ask(true));
+  } catch (e) {
+    console.error("couldn't search the web for recipes; asking without it", e);
+    ({ data } = await ask(false));
+  }
   const out: Candidate[] = [];
   const seen = new Set(t.seen.map(norm));
   for (const c of data.links ?? []) {
