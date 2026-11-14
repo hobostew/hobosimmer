@@ -56,24 +56,31 @@ export function searchPrompt(t: Taste, want: number): string {
   ].filter(Boolean).join("\n");
 }
 
+/** How long is left of the budget, in milliseconds, or a sensible default when there isn't one. */
+const left = (by: number | undefined, fallback: number) => (by ? Math.max(0, by - Date.now()) : fallback);
+
 /**
  * The links the model found. Only their shape is trusted; whether a page is real is settled by opening it.
  *
  * Searching the web is the better way (the links are ones Google just saw), but it's a separate allowance on a Google
  * account and not every key has it. When the search is turned down, the model is asked again without it, from what it
  * already knows: more of those links will be stale, which costs nothing, because every one is opened and read here
- * before it can become a recipe.
+ * before it can become a recipe. Both asks share the budget, leaving time to open the pages afterwards.
  */
-async function candidates(t: Taste, want: number): Promise<Candidate[]> {
+async function candidates(t: Taste, want: number, by?: number): Promise<Candidate[]> {
+  // Two thirds of what's left at most, so there's always time to open some pages with what comes back.
+  const slice = () => Math.min(30_000, Math.max(5_000, Math.round(left(by, 45_000) * 0.45)));
   const ask = (search: boolean) => generateJson<{ links: Candidate[] }>(
     search ? searchPrompt(t, want) : `${searchPrompt(t, want)}\nUse addresses of real recipe pages you are confident exist.`,
-    LINKS_SCHEMA, { search, timeoutMs: 45_000 },
+    LINKS_SCHEMA, { search, timeoutMs: slice() },
   );
   let data: { links: Candidate[] };
   try {
     ({ data } = await ask(true));
   } catch (e) {
     console.error("couldn't search the web for recipes; asking without it", e);
+    // Without time to ask again and still open a page, there's nothing useful to be had.
+    if (by && left(by, 0) < 8_000) return [];
     ({ data } = await ask(false));
   }
   const out: Candidate[] = [];
@@ -93,8 +100,9 @@ type Rejected = "unreadable" | "not-a-dinner" | "already-have" | "allergy";
 /** One candidate, opened and read by our own code. null when it isn't a recipe we can use. */
 async function verify(c: Candidate, have: Recipe[], t: Taste, signal?: AbortSignal): Promise<Draft | Rejected> {
   if (signal?.aborted) return "unreadable";
-  // readLink is the same reader Add recipes uses: the page's own recipe data first, the model only as a fallback.
-  const found = await readLink(c.url).catch(() => null);
+  // readLink is the same reader Add recipes uses, in its quick form: the page's own recipe data or nothing, so one
+  // awkward site can't use up the time the other links need.
+  const found = await readLink(c.url, true).catch(() => null);
   const d = found?.[0];
   if (!d?.name || !d.ingredients.length) return "unreadable";
   // Read the same way a saved recipe's lines are, so the allergy check sees the items themselves ("peanut butter").
@@ -129,7 +137,7 @@ export async function findNew(want: number, signal?: AbortSignal, by?: number): 
   if (want < 1) return { drafts: [], looked: 0 };
   const [all, hh] = await Promise.all([loadRecipes(), loadHousehold()]);
   const taste = tasteOf(all, hh.profile);
-  const links = await candidates(taste, want);
+  const links = await candidates(taste, want, by);
   if (!links.length) return { drafts: [], looked: 0 };
   const have = [...all];
   let looked = 0;

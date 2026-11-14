@@ -5,10 +5,10 @@ import { findNew } from "@/lib/discover";
 import { fromDraft, loadRecipes, saveRecipes } from "@/lib/recipes";
 
 // A search, then a handful of pages opened and read: the slowest thing Simmer does. 60 seconds is what Vercel's free
-// plan allows, so that's the budget; findNew gives back whatever it has when the time's nearly up rather than being
-// cut off with nothing. On a paid plan this can go higher.
+// plan allows, so the work is given 45 and answers with whatever it has by then — being cut off by the server would
+// lose everything, including the recipes already read. On a paid plan both numbers can go up.
 export const maxDuration = 60;
-const BUDGET_MS = 50_000;
+const BUDGET_MS = 45_000;
 
 /**
  * POST { want }: that many new recipes found on the web, like the favorites, read from their own pages and saved

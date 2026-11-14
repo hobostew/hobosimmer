@@ -3,8 +3,9 @@ import { friendly } from "@/lib/friendly";
 import { authorized, unauthorized } from "@/lib/auth";
 import { readRecipeFile, readLinks, readText } from "@/lib/recipes";
 
-// Several links at once (filling the collection from a list of favorites) takes longer than one.
-export const maxDuration = 120;
+// Several links at once (filling the collection from a list of favorites) takes longer than one. 60 seconds is what
+// Vercel's free plan allows; paste a very long list and it's better to do it in a couple of goes.
+export const maxDuration = 60;
 
 /**
  * POST { link }, { text } or { file: { name, type, data (base64) } }: the recipes found in it, for her to look over

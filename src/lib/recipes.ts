@@ -267,23 +267,31 @@ export async function readLinks(raws: string[]): Promise<Draft[]> {
   return out;
 }
 
-/** Reads the recipe at a link: the page's own recipe data first, the model only when a page doesn't have it. */
-export async function readLink(raw: string): Promise<Draft[]> {
+/**
+ * Reads the recipe at a link: the page's own recipe data first, the model only when a page doesn't have it.
+ *
+ * `quick`: for finding new recipes, where a dozen links are read at once against the clock. It takes the page's own
+ * data or nothing — no asking the model to read the page, and no guessing at the effort — so one awkward site can't
+ * use up the time the rest need. Pasting a link by hand still gets the patient treatment.
+ */
+export async function readLink(raw: string, quick = false): Promise<Draft[]> {
   const u = checkLink(raw);
   let html = "";
   try {
-    const r = await fetch(u, { headers: { "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15", accept: "text/html", "accept-language": "en-US,en;q=0.9" }, signal: AbortSignal.timeout(12_000), redirect: "follow" });
+    const r = await fetch(u, { headers: { "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15", accept: "text/html", "accept-language": "en-US,en;q=0.9" }, signal: AbortSignal.timeout(quick ? 6_000 : 12_000), redirect: "follow" });
     if (!r.ok) throw new Error(`page ${r.status}`);
     html = (await r.text()).slice(0, 3_000_000);
   } catch (e) {
     // Some big recipe sites turn away servers like ours; the model can still open the page from its side.
     console.error("couldn't open", u.hostname, e);
+    if (quick) throw new AppError("Couldn't open that page.");
     const read = await readElsewhere(u.toString()).catch((err) => { console.error("couldn't read elsewhere", err); return []; });
     if (read.length) return read;
     throw new AppError("Couldn't open that page. Copy the recipe from it and use Type it in.");
   }
   const own = recipeInPage(html, u.toString());
-  if (own) return [await withGuesses(own, own.minutes ? "" : own.steps.join(" "))];
+  if (own) return [quick ? own : await withGuesses(own, own.minutes ? "" : own.steps.join(" "))];
+  if (quick) throw new AppError("No recipe on that page.");
   const text = decode(html.replace(/<(script|style|nav|header|footer)[\s\S]*?<\/\1>/gi, " ")).slice(0, 14_000);
   const read = await readText(text, u.toString());
   if (!read.length) throw new AppError("Couldn't find a recipe on that page. Try typing it in.");
