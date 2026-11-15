@@ -177,6 +177,12 @@ export default function App() {
   const setTried = (r: Recipe) => recipeChange({ op: "tried", id: r.id }, (x) => ({ ...x, tried: true }));
   /** Never again: off the collection's lists, and never looked for or found again. */
   const neverAgain = (r: Recipe) => recipeChange({ op: "hide", id: r.id }, (x) => ({ ...x, hidden: true, favorite: false, tried: true, active: false }));
+  /** Out of the collection for good (added by mistake, or read in wrong): it goes at once, and saves behind it. */
+  async function removeRecipe(r: Recipe) {
+    setRecipes((rs) => rs && rs.filter((x) => x.id !== r.id));
+    try { gotRecipes((await api.recipeChange({ op: "remove", id: r.id })).recipes); }
+    catch (e) { failed(e); refreshRecipes(); }
+  }
   const problemOf = (e: unknown) => (e instanceof AuthError ? null : errorText(e));
   /**
    * Edit's Save: the sheet closes at once and the recipe shows the change (Nov 11: no "Saving…"); the ingredients follow
@@ -456,6 +462,7 @@ export default function App() {
       {phase === "app" && open && (
         <RecipeScreen key={open.id} r={open} onBack={back} backLabel={backLabel} onEdit={() => setSheet("edit")}
           onActive={(a) => setActive(open, a)} onFavorite={(on) => setFavorite(open, on)} onTried={() => setTried(open)} onNeverAgain={() => neverAgain(open)}
+          onDelete={() => removeRecipe(open)}
           onAddToList={() => setSheet("tolist")} planned={Boolean(plan?.dishes.some((d) => d.recipe === open.id))}
           onAddToWeek={kindOf(open) ? () => quickAdd({ kind: kindOf(open)!, recipe: open.id, pinned: true }) : undefined} />
       )}

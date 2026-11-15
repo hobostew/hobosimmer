@@ -4,7 +4,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { generateJson } from "./google/gemini";
-import { appendRows, ensureTab, readTabIfAny, sheetsConfigured, updateRanges } from "./google/sheets";
+import { appendRows, ensureTab, readTabIfAny, replaceTab, sheetsConfigured, updateRanges } from "./google/sheets";
 import { loadHousehold } from "./data";
 import { AppError } from "./errors";
 import { known, type Section, type Store } from "./groceries";
@@ -142,6 +142,28 @@ export function fromDraft(d: Draft, existing?: Recipe): Recipe {
 
 /** Saves a recipe: a new row, or only its own row when it's already in the collection (matched by id). */
 export const saveRecipe = async (r: Recipe): Promise<Recipe> => (await saveRecipes([r]))[0];
+
+/**
+ * Takes a recipe out of the collection for good: its row goes. For one added by mistake, or read in wrong.
+ *
+ * This is different from "Never again", which keeps the row so the same page can't be found on the web a second time.
+ * A deleted recipe is forgotten entirely, so one that came from the web could turn up again another week.
+ */
+export async function deleteRecipe(id: string): Promise<void> {
+  if (!id) throw new AppError("Which recipe?");
+  if (!sheetsConfigured()) {
+    const m = (memory ??= toRecipes(await local()));
+    const i = m.findIndex((x) => x.id === id);
+    if (i < 0) throw new AppError("That recipe isn't in the collection anymore.");
+    m.splice(i, 1);
+    return;
+  }
+  const rows = await readTabIfAny(TAB);
+  const recs = records(rows);
+  if (!recs.some((r) => r.get("id") === id)) throw new AppError("That recipe isn't in the collection anymore.");
+  // The tab as it is, less that one row: one write, and the headers stay as they were.
+  await replaceTab(TAB, [rows[0], ...recs.filter((r) => r.get("id") !== id).map((r) => rows[r.rowNumber - 1])], rows);
+}
 
 /**
  * Saves several recipes as saveRecipe does, with one read and at most two writes however many there are (Nov 10: an

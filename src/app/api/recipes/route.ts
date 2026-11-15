@@ -1,7 +1,7 @@
 import { AppError } from "@/lib/errors";
 import { friendly } from "@/lib/friendly";
 import { authorized, unauthorized } from "@/lib/auth";
-import { fromDraft, loadRecipes, saveRecipes, sameName, updateRecipe, type Draft, type Recipe } from "@/lib/recipes";
+import { deleteRecipe, fromDraft, loadRecipes, saveRecipes, sameName, updateRecipe, type Draft, type Recipe } from "@/lib/recipes";
 
 const clean = (s: unknown, max = 60) => (typeof s === "string" ? s.replace(/\s+/g, " ").trim().slice(0, max) : "");
 
@@ -19,7 +19,8 @@ export async function GET(req: Request) {
  * POST { op, ... }: save { recipes: Draft[], duplicates?: "skip" | "replace" } (new ones, or edits by id; a new one
  * whose name is already in the collection is kept as well unless duplicates says otherwise), effort { id, effort },
  * active { id, active }, favorite { id, favorite } (one of ours: it shapes what's looked for and what's planned),
- * hide { id } (never again). Answers with the collection as it is after the change, and what was saved.
+ * tried { id }, hide { id } (never again), remove { id } (out of the collection for good).
+ * Answers with the collection as it is after the change, and what was saved.
  */
 export async function POST(req: Request) {
   if (!authorized(req)) return unauthorized();
@@ -58,6 +59,8 @@ export async function POST(req: Request) {
       case "tried": saved = [(await updateRecipe(clean(b.id), (r) => ({ ...r, tried: true }))).id]; break;
       // Never again: off the collection's lists and never looked for again, but kept, so it isn't found a second time.
       case "hide": saved = [(await updateRecipe(clean(b.id), (r) => ({ ...r, hidden: true, favorite: false, tried: true, active: false }))).id]; break;
+      // Out of the collection for good: for one added by mistake, or read in wrong.
+      case "remove": await deleteRecipe(clean(b.id)); break;
       default: return Response.json({ error: "Unknown change." }, { status: 400 });
     }
     return Response.json({ recipes: await loadRecipes(), saved }, { headers: { "cache-control": "no-store" } });

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { checkAgainst, guessIdeas, fromDraft, isoMinutes, loadRecipes, looksLikeIdeas, parseIngredient, readLinks, recipeInPage, saveRecipe, searchRecipes } from "./recipes";
+import { checkAgainst, deleteRecipe, guessIdeas, fromDraft, isoMinutes, loadRecipes, looksLikeIdeas, parseIngredient, readLinks, recipeInPage, saveRecipe, searchRecipes } from "./recipes";
 
 describe("the recipe collection", () => {
   it("reads ingredient lines", () => {
@@ -43,6 +43,17 @@ describe("the recipe collection", () => {
     expect(all.filter((x) => x.name === "Lemon pasta")).toHaveLength(1);
     expect(all.find((x) => x.id === r.id)?.effort).toBe("regular");
     expect(() => fromDraft({ ...r, ingredients: [], name: "  " })).toThrow();
+  });
+
+  it("takes a recipe out of the collection for good", async () => {
+    const r = fromDraft({ name: "Delete-test soup", effort: "quick", minutes: 20, serves: 2, protein: "", ingredients: ["1 onion"], steps: [], store: "", season: [], for: "everyone", kidOk: "", makeAhead: false, tags: [], source: "Typed in", rating: null, notes: "" });
+    await saveRecipe(r);
+    expect((await loadRecipes()).some((x) => x.id === r.id)).toBe(true);
+    await deleteRecipe(r.id);
+    expect((await loadRecipes()).some((x) => x.id === r.id)).toBe(false);
+    // Saying so beats pretending it worked: the screen shows why.
+    await expect(deleteRecipe(r.id)).rejects.toThrow(/isn't in the collection/);
+    await expect(deleteRecipe("")).rejects.toThrow();
   });
 
   it("reads a recipe page's own recipe data", () => {

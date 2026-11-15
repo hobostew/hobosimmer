@@ -72,7 +72,7 @@ export function RecipesScreen({ recipes, onOpen, onAdd, freezer = [] }: {
 }
 
 /** A recipe (drill-in from Recipes or the week): what it is, what's in it, how it's made, and her one-tap corrections. */
-export function RecipeScreen({ r, onBack, backLabel, onEdit, onActive, onAddToList, planned, onAddToWeek, onFavorite, onTried, onNeverAgain }: {
+export function RecipeScreen({ r, onBack, backLabel, onEdit, onActive, onAddToList, planned, onAddToWeek, onFavorite, onTried, onNeverAgain, onDelete }: {
   r: Recipe; onBack: () => void; backLabel: string; onEdit: () => void; onActive: (a: boolean) => void; onAddToList: () => void;
   /** It's one of this week's dinners: its groceries went on the list when it was planned. */
   planned?: boolean;
@@ -87,8 +87,11 @@ export function RecipeScreen({ r, onBack, backLabel, onEdit, onActive, onAddToLi
   onTried: () => void;
   /** Never again: off every list and never looked for again (kept, so it can't be found a second time). */
   onNeverAgain: () => void;
+  /** Out of the collection for good: for one added by mistake, or read in wrong. */
+  onDelete: () => void;
 }) {
   const [dropping, setDropping] = useState(false); // waiting on "Never again?"
+  const [deleting, setDeleting] = useState(false); // waiting on "Delete?"
   const screen = useRef<HTMLDivElement>(null);
   useSwipe(screen, { onRight: onBack }); // swipe right to go back
   useEffect(() => {
@@ -150,10 +153,15 @@ export function RecipeScreen({ r, onBack, backLabel, onEdit, onActive, onAddToLi
         <Button variant="plain" onClick={() => onActive(!r.active)} className="w-full">{r.active ? "Stop suggesting this" : "Suggest this again"}</Button>
         {/* Tried it and it's not for us: never looked for again, and never found a second time. */}
         {!r.hidden && <Button variant="plain" onClick={() => setDropping(true)} className="w-full">Never again</Button>}
+        {/* Added by mistake, or read in wrong: out of the collection altogether. */}
+        <button onClick={() => setDeleting(true)} className="w-full py-3 t-sub font-semibold text-alert transition active:scale-[0.98]">Delete</button>
       </div>
       <ConfirmSheet open={dropping} title={`Never make ${r.name} again?`} confirm="Never again" danger
         message="It comes off your lists, and nothing like it is looked for again."
         onConfirm={() => { setDropping(false); onNeverAgain(); onBack(); }} onCancel={() => setDropping(false)} />
+      <ConfirmSheet open={deleting} title={`Delete ${r.name}?`} confirm="Delete" danger
+        message="It goes from your recipes for good. Nothing remembers it, so one from the web could be found again another week."
+        onConfirm={() => { setDeleting(false); onDelete(); onBack(); }} onCancel={() => setDeleting(false)} />
     </div>
   );
 }
