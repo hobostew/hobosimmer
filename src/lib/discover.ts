@@ -11,11 +11,23 @@ import { hasAllergen, tasteOf, type Taste } from "./taste";
 import { isDinner } from "./week";
 import { norm } from "./words";
 
-/** How many links to ask for per new recipe wanted: most will be ones we already have, or won't open. */
-const PER_WANT = 3;
-const MOST_LINKS = 18;
-/** Pages are opened a few at a time, so one slow site doesn't hold up the rest. */
-const AT_ONCE = 4;
+/**
+ * How many links to ask for per new recipe wanted. Most won't be kept: big recipe sites turn away servers like ours
+ * (a 403), some pages have moved, and some are ones the house already has. Asking for plenty is cheap; opening them
+ * is what costs time, and that stops as soon as there are enough.
+ */
+const PER_WANT = 6;
+const MOST_LINKS = 24;
+/** Pages are opened several at a time, so one slow site doesn't hold up the rest. */
+const AT_ONCE = 6;
+
+// Which sites can actually be read matters more than which have good recipes: the pages are fetched by a server, and
+// many recipe sites answer a server with 403 however the request is dressed up (checked Nov 14: browser-like headers
+// make no difference). These two lists are from trying them.
+/** Sites that serve a plain request and put recipe data in the page. Only a nudge: any link is still tried. */
+const FRIENDLY = ["recipetineats.com", "skinnytaste.com", "pinchofyum.com", "loveandlemons.com", "foodnetwork.com", "delish.com", "tasteofhome.com", "bbcgoodfood.com"];
+/** Sites that turn a server away, so their pages can't be read however good the recipe is. */
+const UNFRIENDLY = ["allrecipes.com", "simplyrecipes.com", "seriouseats.com", "budgetbytes.com", "eatingwell.com", "halfbakedharvest.com", "themediterraneandish.com", "nytimes.com", "bonappetit.com", "epicurious.com"];
 
 const LINKS_SCHEMA = {
   type: "OBJECT",
@@ -50,8 +62,10 @@ export function searchPrompt(t: Taste, want: number): string {
     `Find ${want * PER_WANT} family dinner recipes on the web that this household would like but does not have yet.`,
     likes,
     have ? `They already have these, so do not suggest them or close variations: ${have}.` : "",
-    "Search the web and answer with links only: the address of each recipe's own page, its title, and a few words on why it suits them.",
-    "Each link must be a real page you found in the search, on an ordinary recipe website, one recipe per page. Do not invent addresses.",
+    "Answer with links only: the address of each recipe's own page, its title, and a few words on why it suits them.",
+    "Each link must be a real page on an ordinary recipe website, one recipe per page. Do not invent addresses.",
+    // The pages are opened by a server; these are the sites that let one in.
+    `Use these sites only: ${FRIENDLY.join(", ")}. Never use ${UNFRIENDLY.join(", ")}: their pages cannot be read.`,
     "Do not include ingredients, times or servings: they are read from the page itself.",
   ].filter(Boolean).join("\n");
 }

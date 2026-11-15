@@ -40,18 +40,22 @@ const PAGES: Record<string, string> = {
   "https://example.com/empty": "<html><body>No recipe here.</body></html>",
 };
 
-const fetchMock = vi.fn(async (url: URL | string) => {
+/** The stand-in web. Kept as its own function so clearing the mocks can't take the behaviour with it. */
+const serve = async (url: URL | string) => {
   const html = PAGES[String(url)];
   // A link the model invented: nothing answers.
   if (!html) return new Response("Not found", { status: 404 });
   return new Response(html, { status: 200, headers: { "content-type": "text/html" } });
-});
+};
+const fetchMock = vi.fn(serve);
 vi.stubGlobal("fetch", fetchMock);
 
 const links = (...urls: string[]) => ({ data: { links: urls.map((url) => ({ url, title: url, why: "like yours" })) }, model: "test", sources: [] });
 
 describe("finding new recipes", () => {
-  beforeEach(() => { vi.clearAllMocks(); });
+  // Only the record of the calls is cleared: clearAllMocks would take the stand-in web's behaviour with it, leaving
+  // fetch answering undefined for every test after the first.
+  beforeEach(() => { generateJson.mockReset(); fetchMock.mockClear(); fetchMock.mockImplementation(serve); });
 
   it("asks for links only: the prompt's schema has nowhere to put ingredients", async () => {
     const { findNew } = await import("./discover");
