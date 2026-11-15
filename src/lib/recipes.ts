@@ -35,6 +35,8 @@ const TAB = "Recipes";
 const HEADERS = ["id", "name", "effort", "minutes", "serves", "protein", "ingredients", "steps", "store", "season", "for", "kid_ok", "make_ahead", "tags", "source", "rating", "notes", "active", "added_at", "favorite", "tried", "hidden", "found_at"];
 
 const yes = (s: string) => /^(yes|y|true|1|x)$/i.test(s.trim());
+/** Whether a cell says anything at all, so a blank can mean "doesn't say" rather than "no". */
+const said = (s: string) => s.trim() !== "";
 const num = (s: string) => { const n = parseFloat(s); return Number.isFinite(n) && n > 0 ? Math.round(n) : null; };
 const words = (s: string) => s.split(/[,;\n]/).map((x) => x.trim()).filter(Boolean);
 const lines = (s: string) => s.split(/\n/).map((x) => x.replace(/^\s*(?:[-•*]|\d+[.)])\s*/, "").trim()).filter(Boolean);
@@ -79,10 +81,11 @@ function toRecipes(rows: string[][]): Recipe[] {
       season: words(r.get("season")).map((s) => s.toLowerCase()), for: asFor(r.get("for")), kidOk: asKidOk(r.get("kid_ok")), makeAhead: yes(r.get("make_ahead")),
       tags: words(r.get("tags")).map((s) => s.toLowerCase()), source: r.get("source"), rating: num(r.get("rating")), notes: r.get("notes"),
       active: !/^(no|n|false|0)$/i.test(r.get("active")), addedAt: r.get("added_at"),
-      // A collection from before these columns: everything in it was put there by hand, so it counts as a favorite
-      // already cooked. Only recipes found on the web (which write "no") are untried.
-      favorite: r.has("favorite") ? yes(r.get("favorite")) : true,
-      tried: r.has("tried") ? yes(r.get("tried")) : true,
+      // A recipe from before these columns, or a row that simply doesn't say: it was put there by hand, so it counts
+      // as a favorite already cooked. Only a recipe found on the web says "no", and that's what makes it new.
+      // (An empty cell has to mean "doesn't say": saving a found recipe gives every older row these columns, empty.)
+      favorite: said(r.get("favorite")) ? yes(r.get("favorite")) : true,
+      tried: said(r.get("tried")) ? yes(r.get("tried")) : true,
       hidden: yes(r.get("hidden")), foundAt: r.get("found_at"),
     }];
   });

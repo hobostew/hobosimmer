@@ -14,6 +14,15 @@ describe("the recipe collection", () => {
     expect(parseIngredient("a pinch of cumin")).toMatchObject({ quantity: "1", unit: "pinch", item: "cumin" });
   });
 
+  it("counts a recipe that doesn't say as one of ours, already cooked", async () => {
+    // data/recipes.csv has no favorite or tried columns: everything in it was put there by hand. And once a found
+    // recipe is saved, every older row gains those columns empty — which must still mean "doesn't say", or the whole
+    // collection would turn into new recipes to try.
+    const all = await loadRecipes();
+    const chili = all.find((r) => r.name === "Turkey chili")!;
+    expect([chili.favorite, chili.tried, chili.hidden]).toEqual([true, true, false]);
+  });
+
   it("searches by name, ingredient, tag, effort, store and who it's for", async () => {
     const all = await loadRecipes();
     expect(searchRecipes(all, "tacos")[0].name).toBe("Tacos");
